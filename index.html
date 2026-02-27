@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>KiwiSkate</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <span class="status-time">9:41</span>
+    <div class="status-icons">
+      <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0.5" width="3" height="11.5" rx="1"/><rect x="13.5" y="0" width="2.5" height="12" rx="1" opacity="0.4"/></svg>
+      <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><path d="M8 2.4C10.5 2.4 12.7 3.5 14.2 5.2L15.5 3.8C13.6 1.7 11 0.4 8 0.4C5 0.4 2.4 1.7 0.5 3.8L1.8 5.2C3.3 3.5 5.5 2.4 8 2.4Z" opacity="0.4"/><path d="M8 5.4C9.8 5.4 11.4 6.2 12.5 7.5L13.8 6.1C12.3 4.5 10.3 3.4 8 3.4C5.7 3.4 3.7 4.5 2.2 6.1L3.5 7.5C4.6 6.2 6.2 5.4 8 5.4Z"/><path d="M8 8.4C9.1 8.4 10.1 8.9 10.8 9.7L8 12.4L5.2 9.7C5.9 8.9 6.9 8.4 8 8.4Z"/></svg>
+      <svg width="25" height="12" viewBox="0 0 25 12" fill="none"><rect x="0.5" y="0.5" width="21" height="11" rx="3.5" stroke="currentColor" stroke-opacity="0.35"/><rect x="1" y="1" width="18" height="10" rx="3" fill="currentColor"/><path d="M23 4V8C24.1 7.5 24.1 4.5 23 4Z" fill="currentColor" opacity="0.4"/></svg>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div class="app-shell">
+
+    <!-- ===== DASHBOARD ===== -->
+    <section class="screen active" id="screen-dashboard">
+      <div class="screen-scroll">
+        <!-- Header -->
+        <div class="dash-header">
+          <div>
+            <p class="dash-greeting">Kia ora, Aroha 👋</p>
+            <h1 class="dash-title">Ready to skate?</h1>
+          </div>
+          <div class="avatar">AR</div>
+        </div>
+
+        <!-- Next Session Card -->
+        <div class="card card-accent">
+          <div class="card-tag">Next Session</div>
+          <h3 class="card-title">Freestyle Practice</h3>
+          <div class="session-meta">
+            <span class="meta-pill">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Tomorrow, 7:00 AM
+            </span>
+            <span class="meta-pill">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              Paradice Ice Auckland
+            </span>
+          </div>
+          <button class="btn-outline">View Details</button>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="section-label">This Week</div>
+        <div class="stats-row">
+          <div class="stat-card">
+            <span class="stat-value">4</span>
+            <span class="stat-label">Sessions</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value">7.5h</span>
+            <span class="stat-label">Ice Time</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value">12</span>
+            <span class="stat-label">Skills Hit</span>
+          </div>
+        </div>
+
+        <!-- Dynamic Skills Progress — populated by JS -->
+        <div id="dash-skills-section"></div>
+
+        <!-- Current Goals -->
+        <div class="section-label">Current Goals</div>
+        <div class="goal-card">
+          <div class="goal-icon">🥈</div>
+          <div class="goal-info">
+            <p class="goal-name">Silver Dance Test</p>
+            <p class="goal-sub">Targeting August 2026</p>
+          </div>
+          <div class="goal-progress">
+            <div class="progress-ring">
+              <svg viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15"/><circle class="ring-fill" cx="18" cy="18" r="15" style="stroke-dasharray: 68, 94"/></svg>
+              <span class="ring-label">72%</span>
+            </div>
+          </div>
+        </div>
+        <div class="goal-card">
+          <div class="goal-icon">🌀</div>
+          <div class="goal-info">
+            <p class="goal-name">Clean Double Salchow</p>
+            <p class="goal-sub">Ongoing</p>
+          </div>
+          <div class="goal-progress">
+            <div class="progress-ring">
+              <svg viewBox="0 0 36 36"><circle class="ring-bg" cx="18" cy="18" r="15"/><circle class="ring-fill" cx="18" cy="18" r="15" style="stroke-dasharray: 42, 94"/></svg>
+              <span class="ring-label">45%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="section-label">Recent Activity</div>
+        <div class="activity-list">
+          <div class="activity-item">
+            <div class="activity-dot dot-green"></div>
+            <div class="activity-info">
+              <p class="activity-title">Completed Stroking Drills</p>
+              <p class="activity-time">Today · 45 min</p>
+            </div>
+            <span class="activity-badge badge-green">Done</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot dot-blue"></div>
+            <div class="activity-info">
+              <p class="activity-title">Spin Combination Practice</p>
+              <p class="activity-time">Yesterday · 30 min</p>
+            </div>
+            <span class="activity-badge badge-blue">Review</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot dot-orange"></div>
+            <div class="activity-info">
+              <p class="activity-title">Footwork Sequence</p>
+              <p class="activity-time">Mon · 20 min</p>
+            </div>
+            <span class="activity-badge badge-orange">In Progress</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SKILLS ===== -->
+    <section class="screen" id="screen-skills">
+      <div class="screen-scroll">
+        <div class="page-header">
+          <h2 class="page-title">Skills</h2>
+        </div>
+        <!-- Summary card — populated by JS -->
+        <div class="card skills-summary" id="skills-summary"></div>
+        <!-- Working on it list — populated by JS, hidden when empty -->
+        <div id="working-section"></div>
+        <!-- Badge sections — populated by JS -->
+        <div id="skills-list"></div>
+      </div>
+    </section>
+
+    <!-- ===== KIWI BOT ===== -->
+    <section class="screen" id="screen-bot">
+      <div class="kb-container" id="kb-container">
+        <!-- Populated by JS: selector | loading | result states -->
+      </div>
+    </section>
+
+    <!-- ===== SAVED WORKOUTS ===== -->
+    <section class="screen" id="screen-workouts">
+      <div class="screen-scroll">
+        <div class="page-header">
+          <h2 class="page-title">Saved Workouts</h2>
+          <button class="icon-btn icon-btn-accent">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+
+        <!-- Filter Chips -->
+        <div class="chip-scroll">
+          <button class="chip chip-active">All</button>
+          <button class="chip">Jumps</button>
+          <button class="chip">Spins</button>
+          <button class="chip">Footwork</button>
+          <button class="chip">Off-Ice</button>
+        </div>
+
+        <!-- Featured Workout -->
+        <div class="card workout-featured">
+          <div class="workout-featured-top">
+            <span class="wf-tag">⭐ Featured</span>
+            <span class="wf-duration">45 min</span>
+          </div>
+          <h3 class="wf-title">Silver Level Full Session</h3>
+          <p class="wf-desc">A comprehensive on-ice session covering jumps, spins, and step sequences targeting the Silver badge requirements.</p>
+          <div class="wf-meta">
+            <span class="meta-chip">🏒 On-Ice</span>
+            <span class="meta-chip">💪 Intermediate</span>
+            <span class="meta-chip">🗓 6 exercises</span>
+          </div>
+          <button class="btn-primary">Start Workout</button>
+        </div>
+
+        <!-- Workout List -->
+        <div class="section-label">My Saved Workouts</div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #60a5fa, #3b82f6);">🌀</div>
+          <div class="workout-info">
+            <p class="workout-name">Spin Focus Session</p>
+            <p class="workout-meta">30 min · 4 exercises · On-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #f472b6, #ec4899);">💃</div>
+          <div class="workout-info">
+            <p class="workout-name">Jump Combination Drills</p>
+            <p class="workout-meta">40 min · 5 exercises · On-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #34d399, #10b981);">🦵</div>
+          <div class="workout-info">
+            <p class="workout-name">Off-Ice Conditioning</p>
+            <p class="workout-meta">25 min · 8 exercises · Off-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #fbbf24, #f59e0b);">🎵</div>
+          <div class="workout-info">
+            <p class="workout-name">Program Run-Through</p>
+            <p class="workout-meta">20 min · Full program · On-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #a78bfa, #7c3aed);">🧘</div>
+          <div class="workout-info">
+            <p class="workout-name">Flexibility & Stretching</p>
+            <p class="workout-meta">20 min · 6 exercises · Off-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <div class="workout-card">
+          <div class="workout-icon" style="background: linear-gradient(135deg, #fb923c, #ea580c);">⚡</div>
+          <div class="workout-info">
+            <p class="workout-name">Power Stroking Circuit</p>
+            <p class="workout-meta">35 min · 6 exercises · On-Ice</p>
+          </div>
+          <button class="workout-play">▶</button>
+        </div>
+
+        <!-- Kiwi Bot Suggestion -->
+        <div class="bot-suggest-card">
+          <div class="bot-suggest-icon">🥝</div>
+          <div class="bot-suggest-text">
+            <p class="bs-title">Need a custom workout?</p>
+            <p class="bs-sub">Ask Kiwi Bot to generate one for you</p>
+          </div>
+          <button class="bs-btn">Ask</button>
+        </div>
+
+      </div>
+    </section>
+
+  </div><!-- end app-shell -->
+
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-target="dashboard">
+      <div class="nav-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </div>
+      <span class="nav-label">Dashboard</span>
+    </button>
+    <button class="nav-item" data-target="skills">
+      <div class="nav-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      </div>
+      <span class="nav-label">Skills</span>
+    </button>
+    <button class="nav-item nav-item-center" data-target="bot">
+      <div class="nav-center-btn">
+        <span>🥝</span>
+      </div>
+      <span class="nav-label">Kiwi Bot</span>
+    </button>
+    <button class="nav-item" data-target="workouts">
+      <div class="nav-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+      </div>
+      <span class="nav-label">Workouts</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
