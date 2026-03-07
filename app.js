@@ -6,6 +6,67 @@
   'use strict';
 
   // ============================================================
+  // SUPABASE — Sync layer
+  // ============================================================
+  const SUPABASE_URL = 'https://xexjtcsdoipligkwigwt.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_osMoyj4jCA99IFs_eqewyg_eq7Aains';
+  const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+  // Write to Supabase in the background (fire-and-forget)
+  function syncToCloud(key, value) {
+    if (!sb) return;
+    sb.from('app_data').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+      .then(({ error }) => { if (error) console.warn('Sync write failed:', key, error.message); });
+  }
+
+  // Pull all data from Supabase and overwrite localStorage, then refresh UI
+  async function syncFromCloud() {
+    if (!sb) return;
+    try {
+      const { data, error } = await sb.from('app_data').select('key, value');
+      if (error) { console.warn('Sync read failed:', error.message); return; }
+      if (!data || data.length === 0) {
+        // First time: push current localStorage up to Supabase
+        await pushAllToCloud();
+        return;
+      }
+      let changed = false;
+      data.forEach(row => {
+        const current = localStorage.getItem(row.key);
+        const remote = JSON.stringify(row.value);
+        if (current !== remote) {
+          localStorage.setItem(row.key, remote);
+          changed = true;
+        }
+      });
+      if (changed) {
+        // Re-render everything with the synced data
+        renderDashboard();
+        renderWorkouts();
+        initSkills();
+      }
+    } catch (e) { console.warn('Sync error:', e); }
+  }
+
+  // Push all current localStorage data to Supabase (first-time setup)
+  async function pushAllToCloud() {
+    if (!sb) return;
+    const keys = [
+      'kiwiskate-workouts-v2', 'kiwiskate-skills-v1',
+      'kiwiskate-collapse-v1', 'kiwiskate-last-edit-v1', 'kiwiskate-notes-v1'
+    ];
+    for (const key of keys) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        try {
+          const value = JSON.parse(raw);
+          await sb.from('app_data').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        } catch (e) { /* skip invalid JSON */ }
+      }
+    }
+  }
+
+  // ============================================================
   // TAB NAVIGATION
   // ============================================================
   const navItems  = document.querySelectorAll('.nav-item');
@@ -13,7 +74,6 @@
   const screenMap = {
     dashboard: 'screen-dashboard',
     skills:    'screen-skills',
-    bot:       'screen-bot',
     workouts:  'screen-workouts',
   };
 
@@ -39,299 +99,427 @@
   });
 
   // ============================================================
-  // KIWI BOT — Workout Generator
+  // WORKOUTS — Data & Storage
   // ============================================================
-  const KIWI_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="110" height="110">
-    <ellipse cx="62" cy="108" rx="30" ry="6" fill="rgba(0,0,0,0.07)"/>
-    <ellipse cx="60" cy="74" rx="36" ry="30" fill="#8B5E3C"/>
-    <circle cx="80" cy="48" r="22" fill="#8B5E3C"/>
-    <circle cx="87" cy="54" r="5" fill="#c47a5a" opacity="0.5"/>
-    <circle cx="86" cy="44" r="5" fill="white"/>
-    <circle cx="87" cy="44" r="3" fill="#1a1826"/>
-    <circle cx="89" cy="42" r="1.2" fill="white"/>
-    <path d="M97 51 L120 56 L97 60 Z" fill="#E07B39"/>
-    <line x1="98" y1="53" x2="116" y2="56" stroke="rgba(255,255,255,0.25)" stroke-width="1.5" stroke-linecap="round"/>
-    <path d="M33 72 Q24 60 38 54 Q42 70 33 72Z" fill="#7A5030"/>
-    <g fill="none" stroke="#E07B39" stroke-width="3" stroke-linecap="round">
-      <path d="M48 100 L43 110 M48 100 L50 111 M48 100 L55 108"/>
-      <path d="M68 103 L63 113 M68 103 L70 114 M68 103 L76 111"/>
-    </g>
-    <g fill="none" stroke="#7A5030" stroke-width="1.5" opacity="0.35" stroke-linecap="round">
-      <path d="M33 65 Q50 57 67 66"/>
-      <path d="M30 73 Q50 64 70 74"/>
-      <path d="M33 82 Q52 73 70 82"/>
-    </g>
-  </svg>`;
 
-  const KB_DURATION_OPTIONS = [
-    { value: 15, label: '15 min' },
-    { value: 30, label: '30 min' },
-    { value: 45, label: '45 min' },
-    { value: 60, label: '60 min' },
-    { value: 90, label: '90 min' },
-  ];
-  const KB_ENV_OPTIONS = [
-    { value: 'on-ice',  label: '🧊 On Ice' },
-    { value: 'off-ice', label: '🏃 Off Ice' },
-  ];
-  const KB_INTENSITY_OPTIONS = [
-    { value: 'easy',    label: '😌 Easy' },
-    { value: 'regular', label: '💪 Regular' },
-    { value: 'intense', label: '🔥 Intense' },
-  ];
+  const WORKOUTS_KEY = 'kiwiskate-workouts-v2';
 
-  let kbSelections    = { duration: 30, environment: 'on-ice', intensity: 'regular' };
-  let kbCurrentWorkout = null;
+  function loadWorkouts() {
+    try { return JSON.parse(localStorage.getItem(WORKOUTS_KEY)) || []; } catch { return []; }
+  }
+  function saveWorkouts(w) { localStorage.setItem(WORKOUTS_KEY, JSON.stringify(w)); syncToCloud(WORKOUTS_KEY, w); }
 
-  function getWorkingSkills() {
-    const state = loadSkillsState();
-    const working = [];
-    ALL_BADGES.forEach(badge => {
-      badge.skills.forEach((skill, idx) => {
-        if (getSkillData(state, badge.id, idx).working) {
-          working.push({ badge: badge.name, skill });
-        }
-      });
+  function totalWorkoutMins(items) {
+    return items.reduce((s, i) => s + (i.minutes || 0), 0);
+  }
+
+  // ============================================================
+  // WORKOUTS — List rendering
+  // ============================================================
+  function renderWorkouts() {
+    const el = document.getElementById('workouts-list');
+    if (!el) return;
+    const saved = loadWorkouts();
+    if (saved.length === 0) {
+      el.innerHTML = `
+        <div class="workouts-empty">
+          <div class="workouts-empty-illustration">
+            <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+              <circle cx="40" cy="40" r="36" fill="var(--accent-soft)"/>
+              <text x="40" y="48" text-anchor="middle" font-size="36">⛸</text>
+            </svg>
+          </div>
+          <div class="workouts-empty-text">No workouts yet</div>
+          <div class="workouts-empty-sub">Build a practice session to track your time on each skill</div>
+          <button class="workouts-empty-cta" id="empty-new-workout" type="button">+ Create Workout</button>
+        </div>`;
+      document.getElementById('empty-new-workout')?.addEventListener('click', () => openBuilder());
+      return;
+    }
+
+    // Summary stats
+    const totalSessions = saved.length;
+    const totalMins = saved.reduce((s, w) => s + totalWorkoutMins(w.items), 0);
+    const avgMins = Math.round(totalMins / totalSessions);
+    let html = `
+      <div class="workouts-stats">
+        <div class="wstat"><span class="wstat-val">${totalSessions}</span><span class="wstat-lbl">Workouts</span></div>
+        <div class="wstat"><span class="wstat-val">${totalMins}</span><span class="wstat-lbl">Total Min</span></div>
+        <div class="wstat"><span class="wstat-val">${avgMins}</span><span class="wstat-lbl">Avg Min</span></div>
+      </div>`;
+
+    // Group by date
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const thisWeek = [];
+    const earlier = [];
+    saved.forEach(entry => {
+      const d = new Date(entry.date);
+      if (d >= startOfWeek) thisWeek.push(entry);
+      else earlier.push(entry);
     });
-    return working;
+
+    function buildTile(entry) {
+      const dateStr = new Date(entry.date).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' });
+      const totalMin = totalWorkoutMins(entry.items);
+      const skillCount = entry.items.length;
+      return `
+        <div class="saved-workout-tile" data-workout-id="${entry.id}">
+          <div class="swt-left">
+            <div class="swt-name">${entry.name}</div>
+            <div class="swt-meta">${skillCount} skill${skillCount !== 1 ? 's' : ''} · ${dateStr}</div>
+          </div>
+          <div class="swt-right">
+            <span class="swt-dur-pill">${totalMin} min</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="swt-chevron"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>`;
+    }
+
+    if (thisWeek.length > 0) {
+      html += `<div class="section-label">This Week</div>`;
+      html += thisWeek.map(buildTile).join('');
+    }
+    if (earlier.length > 0) {
+      html += `<div class="section-label">Earlier</div>`;
+      html += earlier.map(buildTile).join('');
+    }
+
+    el.innerHTML = html;
   }
 
-  function buildKbChips(options, selectedVal, key) {
-    return options.map(o =>
-      `<button class="kb-chip${String(o.value) === String(selectedVal) ? ' active' : ''}" data-kb-key="${key}" data-kb-val="${o.value}">${o.label}</button>`
-    ).join('');
-  }
-
-  function renderKiwiSelector() {
-    const el = document.getElementById('kb-container');
-    if (!el) return;
-    const working = getWorkingSkills();
-    const workingCard = working.length > 0
-      ? `<div class="kb-working-card">
-           <span class="kb-working-icon">🎯</span>
-           <span class="kb-working-text">I'll focus on your <strong>${working.length} working-on-it skill${working.length > 1 ? 's' : ''}</strong>: ${working.map(w => w.skill).slice(0, 3).join(', ')}${working.length > 3 ? ` +${working.length - 3} more` : ''}</span>
-         </div>`
-      : '';
-    el.innerHTML = `
-      <div class="kb-scroll">
-        <div class="kb-hero">
-          <div class="kb-kiwi-wrap"><span class="kb-kiwi-bob">${KIWI_SVG}</span></div>
-          <div class="kb-speech">Kia ora! Let me whip up a session for you! 🏒</div>
-        </div>
-        ${workingCard}
-        <div class="kb-section">
-          <div class="kb-label">How long do you have?</div>
-          <div class="kb-chips">${buildKbChips(KB_DURATION_OPTIONS, kbSelections.duration, 'duration')}</div>
-        </div>
-        <div class="kb-section">
-          <div class="kb-label">Where are you skating?</div>
-          <div class="kb-chips">${buildKbChips(KB_ENV_OPTIONS, kbSelections.environment, 'environment')}</div>
-        </div>
-        <div class="kb-section">
-          <div class="kb-label">How are you feeling?</div>
-          <div class="kb-chips">${buildKbChips(KB_INTENSITY_OPTIONS, kbSelections.intensity, 'intensity')}</div>
-        </div>
-        <button class="kb-generate-btn" id="kb-generate">✨ Generate Workout</button>
-      </div>`;
-  }
-
-  function renderKiwiLoading() {
-    const el = document.getElementById('kb-container');
-    if (!el) return;
-    el.innerHTML = `
-      <div class="kb-loading">
-        <div class="kb-kiwi-bob">${KIWI_SVG}</div>
-        <div class="kb-loading-text">Generating your session…</div>
-        <div class="kb-dots">
-          <div class="kb-dot"></div>
-          <div class="kb-dot"></div>
-          <div class="kb-dot"></div>
-        </div>
-      </div>`;
-  }
-
-  function renderKiwiResult(workout) {
-    const el = document.getElementById('kb-container');
-    if (!el) return;
-    const warmupItems   = (workout.warmup?.items   || []).map(i => `<li>${i}</li>`).join('');
-    const cooldownItems = (workout.cooldown?.items || []).map(i => `<li>${i}</li>`).join('');
-    const mainHTML = (workout.main || []).map(ex => `
-      <div class="kb-ex">
-        <div class="kb-ex-header">
-          <span class="kb-ex-name">${ex.name}</span>
-          ${ex.duration ? `<span class="kb-ex-dur">${ex.duration}</span>` : ''}
-        </div>
-        ${ex.description ? `<div class="kb-ex-desc">${ex.description}</div>` : ''}
-        ${ex.tips       ? `<div class="kb-ex-tip">💡 ${ex.tips}</div>`       : ''}
-      </div>`).join('');
-
-    const envLabel = kbSelections.environment === 'on-ice' ? 'On Ice' : 'Off Ice';
-    const intLabel = kbSelections.intensity.charAt(0).toUpperCase() + kbSelections.intensity.slice(1);
-
-    el.innerHTML = `
-      <div class="kb-scroll">
-        <div class="kb-hero">
-          <div class="kb-kiwi-wrap"><span class="kb-kiwi-bob">${KIWI_SVG}</span></div>
-          <div class="kb-speech">Here's your workout! Ka pai! 🎉</div>
-        </div>
-        <div class="kb-result-title">${workout.title || 'Your Session'}</div>
-        <div class="kb-result-sub">${kbSelections.duration} min · ${envLabel} · ${intLabel}</div>
-        ${warmupItems ? `<div class="kb-block"><div class="kb-block-title">🌡 Warm-Up${workout.warmup?.duration ? ' · ' + workout.warmup.duration : ''}</div><ul>${warmupItems}</ul></div>` : ''}
-        ${mainHTML    ? `<div class="kb-block"><div class="kb-block-title">⛸ Main Session</div>${mainHTML}</div>` : ''}
-        ${cooldownItems ? `<div class="kb-block"><div class="kb-block-title">❄️ Cool-Down${workout.cooldown?.duration ? ' · ' + workout.cooldown.duration : ''}</div><ul>${cooldownItems}</ul></div>` : ''}
-        ${workout.notes ? `<div class="kb-notes">📝 ${workout.notes}</div>` : ''}
-        <div style="height:8px"></div>
-      </div>
-      <div class="kb-footer">
-        <button class="kb-save-btn" id="kb-save">Save Workout</button>
-        <button class="kb-regen-btn" id="kb-regen">Regenerate</button>
-      </div>`;
-  }
-
-  function renderKiwiError(msg) {
-    const el = document.getElementById('kb-container');
-    if (!el) return;
-    el.innerHTML = `
-      <div class="kb-scroll">
-        <div class="kb-hero">
-          <div class="kb-kiwi-wrap"><span>${KIWI_SVG}</span></div>
-          <div class="kb-speech">Oops, something went wrong!</div>
-        </div>
-        <div class="kb-error">${msg}</div>
-        <button class="kb-generate-btn" id="kb-retry">Try Again</button>
-      </div>`;
-  }
-
-  function showApiKeyModal(onSuccess) {
+  // ============================================================
+  // WORKOUTS — Detail view (read-only, with Edit / Delete)
+  // ============================================================
+  function initWorkoutDetail() {
     const overlay = document.createElement('div');
-    overlay.className = 'kb-modal-overlay';
+    overlay.className = 'workout-detail-overlay';
+    overlay.id = 'workout-detail-overlay';
     overlay.innerHTML = `
-      <div class="kb-modal">
-        <div class="kb-modal-title">OpenAI API Key</div>
-        <div class="kb-modal-desc">To generate workouts, paste your OpenAI API key below. It's stored only on this device and never sent anywhere other than OpenAI.</div>
-        <input type="password" class="kb-modal-input" id="kb-key-input" placeholder="sk-..." autocomplete="off"/>
-        <button class="kb-modal-save" id="kb-key-save">Save & Generate</button>
+      <div class="wdo-header">
+        <button class="wdo-close" id="wdo-close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="wdo-title" id="wdo-title"></div>
+        <div class="wdo-actions">
+          <button class="wdo-edit-btn" id="wdo-edit">Edit</button>
+          <button class="wdo-delete-btn" id="wdo-delete">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="wdo-scroll" id="wdo-scroll"></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#wdo-close').addEventListener('click', () => overlay.classList.remove('open'));
+  }
+
+  let currentDetailId = null;
+
+  function showWorkoutDetail(entry) {
+    currentDetailId = entry.id;
+    const overlay = document.getElementById('workout-detail-overlay');
+    const titleEl = document.getElementById('wdo-title');
+    const scrollEl = document.getElementById('wdo-scroll');
+    if (!overlay || !titleEl || !scrollEl) return;
+    titleEl.textContent = entry.name;
+    const dateStr = new Date(entry.date).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' });
+    const totalMin = totalWorkoutMins(entry.items);
+    const itemsHTML = entry.items.map((item, i) => {
+      const badge = ALL_BADGES.find(b => b.id === item.badgeId);
+      const badgeName = badge ? badge.name : '';
+      return `
+        <div class="wdo-item">
+          <div class="wdo-item-num">${i + 1}</div>
+          <div class="wdo-item-info">
+            <div class="wdo-item-name">${item.skillName}</div>
+            <div class="wdo-item-badge">${badgeName}</div>
+          </div>
+          <div class="wdo-item-dur">${item.minutes} min</div>
+        </div>`;
+    }).join('');
+    scrollEl.innerHTML = `
+      <div class="wdo-meta">${entry.items.length} skill${entry.items.length !== 1 ? 's' : ''} · ${totalMin} min · ${dateStr}</div>
+      <div class="wdo-items">${itemsHTML}</div>`;
+    scrollEl.scrollTop = 0;
+    overlay.classList.add('open');
+  }
+
+  // ============================================================
+  // WORKOUTS — Builder overlay (create & edit)
+  // ============================================================
+  let builderItems = []; // [{ badgeId, skillIdx, skillName, minutes }]
+  let editingWorkoutId = null;
+
+  function initWorkoutBuilder() {
+    const overlay = document.createElement('div');
+    overlay.className = 'workout-builder-overlay';
+    overlay.id = 'workout-builder-overlay';
+    overlay.innerHTML = `
+      <div class="wb-header">
+        <button class="wb-cancel" id="wb-cancel">Cancel</button>
+        <div class="wb-header-title" id="wb-header-title">New Workout</div>
+        <button class="wb-save" id="wb-save">Save</button>
+      </div>
+      <div class="wb-scroll" id="wb-scroll">
+        <div class="wb-name-section">
+          <input type="text" class="wb-name-input" id="wb-name-input" placeholder="Workout name" maxlength="60"/>
+        </div>
+        <div class="wb-section-label">Skills in this workout</div>
+        <div class="wb-items" id="wb-items"></div>
+        <button class="wb-add-btn" id="wb-add-skill" type="button">+ Add Skill</button>
       </div>`;
     document.body.appendChild(overlay);
-    const input = overlay.querySelector('#kb-key-input');
-    overlay.querySelector('#kb-key-save').addEventListener('click', () => {
-      const key = input.value.trim();
-      if (!key.startsWith('sk-')) { input.style.borderColor = '#ef4444'; return; }
-      localStorage.setItem('kiwiskate-openai-key', key);
-      overlay.remove();
-      onSuccess();
-    });
-    setTimeout(() => input.focus(), 50);
+    overlay.querySelector('#wb-cancel').addEventListener('click', closeBuilder);
+    overlay.querySelector('#wb-save').addEventListener('click', saveFromBuilder);
+    overlay.querySelector('#wb-add-skill').addEventListener('click', openSkillPicker);
   }
 
-  async function callOpenAI(prompt) {
-    const key = localStorage.getItem('kiwiskate-openai-key') || '';
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 1500,
-        temperature: 0.8,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `API error ${res.status}`);
+  function openBuilder(workoutEntry) {
+    editingWorkoutId = workoutEntry ? workoutEntry.id : null;
+    const overlay = document.getElementById('workout-builder-overlay');
+    const nameInput = document.getElementById('wb-name-input');
+    const titleEl = document.getElementById('wb-header-title');
+    if (workoutEntry) {
+      titleEl.textContent = 'Edit Workout';
+      nameInput.value = workoutEntry.name;
+      builderItems = workoutEntry.items.map(i => ({ ...i }));
+    } else {
+      titleEl.textContent = 'New Workout';
+      nameInput.value = '';
+      builderItems = [];
     }
-    const data = await res.json();
-    return JSON.parse(data.choices[0].message.content);
+    renderBuilderItems();
+    overlay.classList.add('open');
+    if (!workoutEntry) setTimeout(() => nameInput.focus(), 100);
   }
 
-  async function handleGenerate() {
-    const key = localStorage.getItem('kiwiskate-openai-key') || '';
-    if (!key) { showApiKeyModal(handleGenerate); return; }
-    renderKiwiLoading();
-    const working = getWorkingSkills();
-    const envLabel = kbSelections.environment === 'on-ice' ? 'on-ice' : 'off-ice (no skates)';
-    const workingLine = working.length > 0
-      ? `The skater is currently working on: ${working.map(w => `"${w.skill}" (${w.badge})`).join(', ')}. Prioritise these.`
-      : 'The skater has no specific skills currently marked as working on — design a well-rounded session.';
-    const prompt = `You are a figure skating coach for the New Zealand KiwiSkate programme.
-Generate a ${kbSelections.duration}-minute ${envLabel} training session at ${kbSelections.intensity} intensity.
-${workingLine}
-Use NZ English spelling (e.g. practise, prioritise, recognise).
-Respond ONLY with a valid JSON object in exactly this structure:
-{
-  "title": "Short descriptive session title",
-  "warmup":   { "duration": "X min", "items": ["activity 1", "activity 2", "activity 3"] },
-  "main":     [{ "name": "Exercise name", "duration": "X min", "description": "What to do", "tips": "One key coaching tip" }],
-  "cooldown": { "duration": "X min", "items": ["activity 1", "activity 2"] },
-  "notes": "Optional short coaching note or encouragement (or empty string)"
-}`;
-    try {
-      const workout = await callOpenAI(prompt);
-      kbCurrentWorkout = workout;
-      renderKiwiResult(workout);
-    } catch (err) {
-      renderKiwiError(`${err.message}<br><br>Check your API key is valid and has credits available.`);
-    }
+  function closeBuilder() {
+    document.getElementById('workout-builder-overlay').classList.remove('open');
+    editingWorkoutId = null;
+    builderItems = [];
   }
 
-  function saveWorkout(workout) {
-    const saved = JSON.parse(localStorage.getItem('kiwiskate-saved-workouts-v1') || '[]');
-    saved.unshift({
-      id: Date.now(),
-      date: new Date().toISOString(),
-      duration: kbSelections.duration,
-      environment: kbSelections.environment,
-      intensity: kbSelections.intensity,
-      workout,
-    });
-    localStorage.setItem('kiwiskate-saved-workouts-v1', JSON.stringify(saved));
-  }
-
-  function initKiwiBot() {
-    const el = document.getElementById('kb-container');
+  function renderBuilderItems() {
+    const el = document.getElementById('wb-items');
     if (!el) return;
-    // Single delegated listener on the container handles all bot interactions
-    el.addEventListener('click', e => {
-      const chip = e.target.closest('.kb-chip[data-kb-key]');
-      if (chip) {
-        const key = chip.dataset.kbKey;
-        const val = chip.dataset.kbVal;
-        kbSelections[key] = isNaN(val) ? val : +val;
-        el.querySelectorAll(`.kb-chip[data-kb-key="${key}"]`).forEach(c => {
-          c.classList.toggle('active', c.dataset.kbVal === String(kbSelections[key]));
+    if (builderItems.length === 0) {
+      el.innerHTML = '<div class="wb-empty">No skills added yet. Tap + Add Skill below.</div>';
+      return;
+    }
+    const totalMin = totalWorkoutMins(builderItems);
+    el.innerHTML = builderItems.map((item, i) => {
+      const badge = ALL_BADGES.find(b => b.id === item.badgeId);
+      const badgeName = badge ? badge.name : '';
+      return `
+        <div class="wb-item" data-idx="${i}">
+          <div class="wb-item-drag">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+          </div>
+          <div class="wb-item-info">
+            <div class="wb-item-name">${item.skillName}</div>
+            <div class="wb-item-badge">${badgeName}</div>
+          </div>
+          <div class="wb-item-time">
+            <button class="wb-time-adj" data-idx="${i}" data-delta="-1" type="button">-</button>
+            <span class="wb-time-val">${item.minutes}</span>
+            <button class="wb-time-adj" data-idx="${i}" data-delta="1" type="button">+</button>
+            <span class="wb-time-unit">min</span>
+          </div>
+          <button class="wb-item-remove" data-idx="${i}" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>`;
+    }).join('') + `<div class="wb-total">Total: ${totalMin} min</div>`;
+
+    // Delegated events for time adjust and remove
+    el.onclick = e => {
+      const adjBtn = e.target.closest('.wb-time-adj');
+      if (adjBtn) {
+        const idx = +adjBtn.dataset.idx;
+        const delta = +adjBtn.dataset.delta;
+        builderItems[idx].minutes = Math.max(1, builderItems[idx].minutes + delta);
+        renderBuilderItems();
+        return;
+      }
+      const removeBtn = e.target.closest('.wb-item-remove');
+      if (removeBtn) {
+        builderItems.splice(+removeBtn.dataset.idx, 1);
+        renderBuilderItems();
+      }
+    };
+  }
+
+  function saveFromBuilder() {
+    const nameInput = document.getElementById('wb-name-input');
+    const name = nameInput.value.trim() || 'Untitled Workout';
+    if (builderItems.length === 0) return;
+
+    const saved = loadWorkouts();
+    if (editingWorkoutId) {
+      const idx = saved.findIndex(w => w.id === editingWorkoutId);
+      if (idx !== -1) {
+        saved[idx].name = name;
+        saved[idx].items = builderItems.map(i => ({ ...i }));
+        saved[idx].date = new Date().toISOString();
+      }
+    } else {
+      saved.unshift({
+        id: Date.now(),
+        name,
+        date: new Date().toISOString(),
+        items: builderItems.map(i => ({ ...i })),
+      });
+    }
+    saveWorkouts(saved);
+    closeBuilder();
+    renderWorkouts();
+    renderDashboard();
+    // If we were in detail view, close it too
+    document.getElementById('workout-detail-overlay').classList.remove('open');
+  }
+
+  // ============================================================
+  // WORKOUTS — Skill Picker overlay
+  // ============================================================
+  function initSkillPicker() {
+    const overlay = document.createElement('div');
+    overlay.className = 'skill-picker-overlay';
+    overlay.id = 'skill-picker-overlay';
+    overlay.innerHTML = `
+      <div class="sp-header">
+        <button class="sp-close" id="sp-close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="sp-title">Add Skill</div>
+      </div>
+      <div class="sp-search-wrap">
+        <input type="text" class="sp-search" id="sp-search" placeholder="Search skills..." autocomplete="off"/>
+      </div>
+      <div class="sp-scroll" id="sp-scroll"></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#sp-close').addEventListener('click', closeSkillPicker);
+    const searchInput = overlay.querySelector('#sp-search');
+    searchInput.addEventListener('input', () => renderSkillPickerList(searchInput.value));
+  }
+
+  function openSkillPicker() {
+    const overlay = document.getElementById('skill-picker-overlay');
+    const searchInput = document.getElementById('sp-search');
+    searchInput.value = '';
+    renderSkillPickerList('');
+    overlay.classList.add('open');
+    setTimeout(() => searchInput.focus(), 100);
+  }
+
+  function closeSkillPicker() {
+    document.getElementById('skill-picker-overlay').classList.remove('open');
+  }
+
+  function renderSkillPickerList(query) {
+    const el = document.getElementById('sp-scroll');
+    if (!el) return;
+    const q = query.toLowerCase().trim();
+    let html = '';
+
+    SKILL_GROUPS.forEach(group => {
+      let groupHasMatch = false;
+      let groupHTML = '';
+
+      group.badges.forEach(badge => {
+        let badgeSkills = '';
+        badge.skills.forEach((skill, idx) => {
+          if (q && !skill.toLowerCase().includes(q) && !badge.name.toLowerCase().includes(q)) return;
+          // Check if already in workout
+          const alreadyAdded = builderItems.some(item => item.badgeId === badge.id && item.skillIdx === idx);
+          badgeSkills += `
+            <button class="sp-skill${alreadyAdded ? ' sp-skill-added' : ''}" data-badge="${badge.id}" data-idx="${idx}" data-name="${skill.replace(/"/g, '&quot;')}" type="button"${alreadyAdded ? ' disabled' : ''}>
+              <span class="sp-skill-name">${skill}</span>
+              ${alreadyAdded ? '<span class="sp-skill-check">Added</span>' : '<span class="sp-skill-add">+</span>'}
+            </button>`;
         });
-        return;
-      }
-      if (e.target.closest('#kb-generate') || e.target.closest('#kb-retry')) { handleGenerate(); return; }
-      if (e.target.closest('#kb-regen'))   { handleGenerate(); return; }
-      const saveBtn = e.target.closest('#kb-save');
-      if (saveBtn && kbCurrentWorkout) {
-        saveWorkout(kbCurrentWorkout);
-        saveBtn.textContent = 'Saved ✓';
-        saveBtn.classList.add('saved');
-        saveBtn.disabled = true;
-        return;
+        if (badgeSkills) {
+          groupHTML += `
+            <div class="sp-badge-group">
+              <div class="sp-badge-label">${badge.name}</div>
+              ${badgeSkills}
+            </div>`;
+          groupHasMatch = true;
+        }
+      });
+
+      if (groupHasMatch) {
+        html += `<div class="sp-group-label">${group.label}</div>${groupHTML}`;
       }
     });
-    renderKiwiSelector();
+
+    if (!html) {
+      html = '<div class="sp-no-results">No matching skills found</div>';
+    }
+    el.innerHTML = html;
+
+    // Delegated click
+    el.onclick = e => {
+      const btn = e.target.closest('.sp-skill:not(.sp-skill-added)');
+      if (!btn) return;
+      const badgeId = btn.dataset.badge;
+      const idx = +btn.dataset.idx;
+      const skillName = btn.dataset.name;
+      builderItems.push({ badgeId, skillIdx: idx, skillName, minutes: 5 });
+      renderBuilderItems();
+      // Mark as added
+      btn.classList.add('sp-skill-added');
+      btn.disabled = true;
+      btn.querySelector('.sp-skill-add').textContent = 'Added';
+      btn.querySelector('.sp-skill-add').className = 'sp-skill-check';
+    };
   }
 
-  const askBtn = document.querySelector('.bs-btn');
-  if (askBtn) askBtn.addEventListener('click', () => switchTab('bot'));
+  // ============================================================
+  // WORKOUTS — Init
+  // ============================================================
+  function initWorkouts() {
+    initWorkoutDetail();
+    initWorkoutBuilder();
+    initSkillPicker();
+    renderWorkouts();
 
-  // ============================================================
-  // STATUS BAR CLOCK
-  // ============================================================
-  function updateClock() {
-    const el = document.querySelector('.status-time');
-    if (!el) return;
-    const now = new Date();
-    const h = now.getHours(), m = now.getMinutes().toString().padStart(2, '0');
-    el.textContent = `${h % 12 || 12}:${m}`;
+    // List click — open detail
+    const el = document.getElementById('workouts-list');
+    if (el) {
+      el.addEventListener('click', e => {
+        const tile = e.target.closest('.saved-workout-tile');
+        if (!tile) return;
+        const id = +tile.dataset.workoutId;
+        const saved = loadWorkouts();
+        const entry = saved.find(w => w.id === id);
+        if (entry) showWorkoutDetail(entry);
+      });
+    }
+
+    // New workout button
+    const newBtn = document.getElementById('btn-new-workout');
+    if (newBtn) newBtn.addEventListener('click', () => openBuilder(null));
+
+    // Edit button in detail
+    document.getElementById('wdo-edit').addEventListener('click', () => {
+      const saved = loadWorkouts();
+      const entry = saved.find(w => w.id === currentDetailId);
+      if (entry) openBuilder(entry);
+    });
+
+    // Delete button in detail
+    document.getElementById('wdo-delete').addEventListener('click', () => {
+      if (!confirm('Delete this workout?')) return;
+      const saved = loadWorkouts().filter(w => w.id !== currentDetailId);
+      saveWorkouts(saved);
+      document.getElementById('workout-detail-overlay').classList.remove('open');
+      renderWorkouts();
+      renderDashboard();
+    });
   }
-  updateClock();
-  setInterval(updateClock, 30000);
 
   // ============================================================
   // SKILLS — DATA (KiwiSkate NZ 2019 Rules & Regulations)
@@ -490,6 +678,23 @@ Respond ONLY with a valid JSON object in exactly this structure:
   // Flat list for quick lookups
   const ALL_BADGES = SKILL_GROUPS.flatMap(g => g.badges);
 
+  // Per-badge accent colours for visual variety
+  const BADGE_COLORS = {
+    beginner:   { bg: '#e8f5e9', fg: '#2e7d32', bar: '#4caf50' },
+    elementary: { bg: '#e0f2f1', fg: '#00695c', bar: '#26a69a' },
+    basic:      { bg: '#e3f2fd', fg: '#1565c0', bar: '#42a5f5' },
+    novice1:    { bg: '#fff8e1', fg: '#f57f17', bar: '#ffca28' },
+    novice2:    { bg: '#fff3e0', fg: '#e65100', bar: '#ffa726' },
+    advanced:   { bg: '#fce4ec', fg: '#c62828', bar: '#ef5350' },
+    figure1:    { bg: '#ede7f6', fg: '#4527a0', bar: '#7e57c2' },
+    figure2:    { bg: '#f3e5f5', fg: '#7b1fa2', bar: '#ab47bc' },
+    figure3:    { bg: '#e8eaf6', fg: '#283593', bar: '#5c6bc0' },
+    figure4:    { bg: '#e0f7fa', fg: '#00838f', bar: '#26c6da' },
+    fs1:        { bg: '#fff8e1', fg: '#f9a825', bar: '#ffee58' },
+    fs2:        { bg: '#f1f8e9', fg: '#558b2f', bar: '#9ccc65' },
+    fs3:        { bg: '#fce4ec', fg: '#ad1457', bar: '#ec407a' },
+  };
+
   // ============================================================
   // SKILLS — STATE (localStorage)
   // ============================================================
@@ -500,14 +705,16 @@ Respond ONLY with a valid JSON object in exactly this structure:
   function loadSkillsState() {
     try { return JSON.parse(localStorage.getItem(SKILLS_KEY)) || {}; } catch { return {}; }
   }
-  function saveSkillsState(s)  { localStorage.setItem(SKILLS_KEY,   JSON.stringify(s)); }
+  function saveSkillsState(s)  { localStorage.setItem(SKILLS_KEY, JSON.stringify(s)); syncToCloud(SKILLS_KEY, s); }
   function loadCollapseState() {
     try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY)) || {}; } catch { return {}; }
   }
-  function saveCollapseState(cs) { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(cs)); }
+  function saveCollapseState(cs) { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(cs)); syncToCloud(COLLAPSE_KEY, cs); }
 
   function saveLastEdit(badgeId, skillIdx, stars) {
-    localStorage.setItem(LAST_EDIT_KEY, JSON.stringify({ badgeId, skillIdx, stars }));
+    const val = { badgeId, skillIdx, stars };
+    localStorage.setItem(LAST_EDIT_KEY, JSON.stringify(val));
+    syncToCloud(LAST_EDIT_KEY, val);
   }
   function loadLastEdit() {
     try { return JSON.parse(localStorage.getItem(LAST_EDIT_KEY)); } catch { return null; }
@@ -523,24 +730,58 @@ Respond ONLY with a valid JSON object in exactly this structure:
   }
 
   // ============================================================
-  // SKILLS — BOOKMARK SVG (shared)
+  // SKILLS — SHARED SVGs
   // ============================================================
   const BOOKMARK_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
+  const STAR_SVG = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 2.5c.38 0 .74.21.92.55l2.35 4.76 5.26.76c.4.06.73.34.86.72.13.39.03.81-.25 1.09l-3.8 3.71.9 5.23c.07.4-.1.8-.43 1.04-.33.23-.77.27-1.14.08L12 17.77l-4.67 2.46c-.37.19-.81.15-1.14-.08-.33-.24-.5-.64-.43-1.04l.9-5.23-3.8-3.71c-.28-.28-.38-.7-.25-1.09.13-.38.46-.66.86-.72l5.26-.76 2.35-4.76c.18-.34.54-.55.92-.55z"/></svg>`;
+  const CHEVRON_RIGHT_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>`;
+
+  // ============================================================
+  // SKILLS — NOTES (localStorage)
+  // ============================================================
+  const NOTES_KEY = 'kiwiskate-notes-v1';
+
+  function loadAllNotes() {
+    try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch { return {}; }
+  }
+  function saveAllNotes(n) { localStorage.setItem(NOTES_KEY, JSON.stringify(n)); syncToCloud(NOTES_KEY, n); }
+  function notesKey(badgeId, idx) { return `${badgeId}:${idx}`; }
+  function getSkillNotes(badgeId, idx) {
+    return loadAllNotes()[notesKey(badgeId, idx)] || [];
+  }
+  function addSkillNote(badgeId, idx, text) {
+    const all = loadAllNotes();
+    const key = notesKey(badgeId, idx);
+    if (!all[key]) all[key] = [];
+    all[key].unshift({ id: Date.now(), text, date: new Date().toISOString() });
+    saveAllNotes(all);
+  }
+  function deleteSkillNote(badgeId, idx, noteId) {
+    const all = loadAllNotes();
+    const key = notesKey(badgeId, idx);
+    if (!all[key]) return;
+    all[key] = all[key].filter(n => n.id !== noteId);
+    if (all[key].length === 0) delete all[key];
+    saveAllNotes(all);
+  }
 
   // ============================================================
   // SKILLS — BUILD HTML
   // ============================================================
   function buildSkillRowHTML(badgeId, idx, skillName, state) {
     const { stars, working } = getSkillData(state, badgeId, idx);
-    const starsHTML = [1, 2, 3].map(n =>
-      `<button class="star-btn${stars >= n ? ' filled' : ''}" data-badge="${badgeId}" data-skill="${idx}" data-star="${n}" type="button" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`
+    const miniStars = [1, 2, 3].map(n =>
+      `<span class="sk-mini-star${stars >= n ? ' filled' : ''}">★</span>`
     ).join('');
+    const allFilled = stars === 3;
     return `
-      <div class="skill-row${working ? ' is-working' : ''}" data-badge="${badgeId}" data-skill="${idx}">
-        <span class="sk-name">${skillName}</span>
-        <div class="sk-actions">
-          <div class="sk-stars">${starsHTML}</div>
-          <button class="working-btn${working ? ' active' : ''}" data-badge="${badgeId}" data-skill="${idx}" type="button" aria-label="Mark as working on it">${BOOKMARK_SVG}</button>
+      <div class="skill-row${working ? ' is-working' : ''}${allFilled ? ' is-mastered' : ''}" data-badge="${badgeId}" data-skill="${idx}">
+        <div class="sk-tap-area">
+          <span class="sk-name">${skillName}</span>
+          <div class="sk-indicators">
+            <span class="sk-mini-stars">${miniStars}</span>
+            <span class="sk-bookmark${working ? ' active' : ''}">${BOOKMARK_SVG}</span>
+          </div>
         </div>
       </div>`;
   }
@@ -554,19 +795,22 @@ Respond ONLY with a valid JSON object in exactly this structure:
     const total    = badge.skills.length;
     const expanded = collapseState[badge.id] !== true;
     const allDone  = mastered === total;
+    const pct      = total > 0 ? Math.round((mastered / total) * 100) : 0;
+    const c        = BADGE_COLORS[badge.id] || { bg: 'var(--accent-soft)', fg: 'var(--accent)', bar: 'var(--accent)' };
     const skillsHTML = badge.skills.map((s, i) => buildSkillRowHTML(badge.id, i, s, state)).join('');
     return `
-      <div class="badge-section${expanded ? ' expanded' : ''}" data-badge-id="${badge.id}">
+      <div class="badge-section${expanded ? ' expanded' : ''}" data-badge-id="${badge.id}" style="background:${c.bg}">
         <button class="badge-header" type="button">
           <div class="badge-header-left">
-            <span class="badge-icon-wrap">${badge.icon}</span>
+            <span class="badge-icon-wrap" style="background:rgba(255,255,255,0.6);font-size:22px">${badge.icon}</span>
             <div class="badge-meta">
               <span class="badge-name-text">${badge.name}</span>
+              <div class="badge-bar-wrap"><div class="badge-bar" style="width:${pct}%;background:${c.bar}"></div></div>
               <span class="badge-progress-sub" id="bsub-${badge.id}">${mastered} of ${total} mastered</span>
             </div>
           </div>
           <div class="badge-header-right">
-            <span class="badge-pill${allDone ? ' pill-done' : ''}" id="bpill-${badge.id}">${allDone ? '✓' : `${mastered}/${total}`}</span>
+            <span class="badge-pill${allDone ? ' pill-done' : ''}" id="bpill-${badge.id}" style="${!allDone ? `background:${c.bg};color:${c.fg}` : ''}">${allDone ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : `${mastered}/${total}`}</span>
             <svg class="badge-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
         </button>
@@ -595,13 +839,14 @@ Respond ONLY with a valid JSON object in exactly this structure:
     el.innerHTML = `
       <div class="ss-top">
         <span class="ss-label">Overall Progress</span>
-        <span class="ss-frac">${mastered}<span class="ss-total"> / ${total} skills</span></span>
+        <span class="ss-frac">${pct}<span class="ss-total">%</span></span>
       </div>
       <div class="progress-bar-wrap"><div class="progress-bar" style="width:${pct}%"></div></div>
+      <div class="ss-sub">${mastered} of ${total} skills mastered</div>
       <div class="ss-stats">
-        <div class="ss-stat"><span class="ss-stat-val">${mastered}</span><span class="ss-stat-lbl">★★★ Mastered</span></div>
-        <div class="ss-stat"><span class="ss-stat-val">${inProgress}</span><span class="ss-stat-lbl">In Progress</span></div>
-        <div class="ss-stat"><span class="ss-stat-val">${total - mastered - inProgress}</span><span class="ss-stat-lbl">Not Started</span></div>
+        <div class="ss-stat ss-stat-mastered"><span class="ss-stat-icon">&#9733;</span><span class="ss-stat-val">${mastered}</span><span class="ss-stat-lbl">Mastered</span></div>
+        <div class="ss-stat ss-stat-progress"><span class="ss-stat-icon">&#9998;</span><span class="ss-stat-val">${inProgress}</span><span class="ss-stat-lbl">In Progress</span></div>
+        <div class="ss-stat ss-stat-new"><span class="ss-stat-icon">&#9675;</span><span class="ss-stat-val">${total - mastered - inProgress}</span><span class="ss-stat-lbl">Not Started</span></div>
       </div>`;
   }
 
@@ -611,10 +856,23 @@ Respond ONLY with a valid JSON object in exactly this structure:
     const mastered = countMastered(badge, state);
     const total    = badge.skills.length;
     const allDone  = mastered === total;
+    const pct      = total > 0 ? Math.round((mastered / total) * 100) : 0;
+    const c        = BADGE_COLORS[badgeId] || { bg: 'var(--accent-soft)', fg: 'var(--accent)', bar: 'var(--accent)' };
     const pill = document.getElementById(`bpill-${badgeId}`);
     const sub  = document.getElementById(`bsub-${badgeId}`);
-    if (pill) { pill.textContent = allDone ? '✓' : `${mastered}/${total}`; pill.classList.toggle('pill-done', allDone); }
+    if (pill) {
+      pill.innerHTML = allDone ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : `${mastered}/${total}`;
+      pill.classList.toggle('pill-done', allDone);
+      pill.style.background = allDone ? '' : c.bg;
+      pill.style.color = allDone ? '' : c.fg;
+    }
     if (sub)  { sub.textContent  = `${mastered} of ${total} mastered`; }
+    // Update progress bar
+    const section = document.querySelector(`.badge-section[data-badge-id="${badgeId}"]`);
+    if (section) {
+      const bar = section.querySelector('.badge-bar');
+      if (bar) { bar.style.width = `${pct}%`; }
+    }
   }
 
   // ============================================================
@@ -639,33 +897,91 @@ Respond ONLY with a valid JSON object in exactly this structure:
       return;
     }
 
-    const listHTML = items.map(({ badge, skillName, idx }) => `
-      <div class="ws-item">
+    const cs = loadCollapseState();
+    const collapsed = cs['_working'] === true;
+
+    const listHTML = items.map(({ badge, skillName, idx }) => {
+      const st = loadSkillsState();
+      const { stars } = getSkillData(st, badge.id, idx);
+      const starHTML = [1,2,3].map(n =>
+        `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`
+      ).join('');
+      return `
+      <div class="ws-item" data-badge="${badge.id}" data-skill="${idx}">
         <div class="ws-info">
-          <span class="ws-badge-label">${badge.icon} ${badge.name}</span>
           <span class="ws-skill-name">${skillName}</span>
+          <span class="ws-badge-label">${badge.name}</span>
         </div>
-        <button class="working-btn active ws-remove" data-badge="${badge.id}" data-skill="${idx}" type="button" aria-label="Remove from working on it">${BOOKMARK_SVG}</button>
-      </div>`).join('');
+        <span class="sr-stars">${starHTML}</span>
+        <span class="sr-bookmark active ws-remove" data-badge="${badge.id}" data-skill="${idx}">${BOOKMARK_SVG}</span>
+      </div>`;
+    }).join('');
 
     el.innerHTML = `
       <div class="working-section">
-        <div class="ws-header">
-          <span class="ws-title">Currently Working On</span>
-          <span class="ws-count-pill">${items.length}</span>
-        </div>
-        <div class="ws-list">${listHTML}</div>
+        <button class="ws-header" id="ws-toggle-btn" type="button">
+          <div class="ws-header-left">
+            <span class="ws-title">Currently Working On</span>
+            <span class="ws-count-pill">${items.length}</span>
+          </div>
+          <svg class="ws-chevron${collapsed ? ' collapsed' : ''}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="ws-list" id="ws-list" style="${collapsed ? 'max-height:0;overflow:hidden;' : ''}">${listHTML}</div>
       </div>`;
   }
 
   // ============================================================
-  // DASHBOARD — Skills Progress section
+  // DASHBOARD — fully dynamic, driven by localStorage data
   // ============================================================
-  function renderDashSkills(state) {
-    const el = document.getElementById('dash-skills-section');
+  function renderDashboard() {
+    const el = document.getElementById('dash-content');
     if (!el) return;
 
-    // Find first incomplete badge (next to achieve)
+    const state = loadSkillsState();
+    let html = '';
+
+    // --- 1. Progress Stats ---
+    let total = 0, mastered = 0, workingOn = 0, badgesComplete = 0;
+    SKILL_GROUPS.forEach(g => g.badges.forEach(b => {
+      let bMastered = 0;
+      b.skills.forEach((_, i) => {
+        total++;
+        const d = getSkillData(state, b.id, i);
+        if (d.stars === 3) { mastered++; bMastered++; }
+        if (d.working) workingOn++;
+      });
+      if (bMastered === b.skills.length) badgesComplete++;
+    }));
+    const pct = total > 0 ? Math.round((mastered / total) * 100) : 0;
+
+    html += `
+      <div class="dash-hero">
+        <span class="dash-hero-emoji">&#10052;</span>
+        <div class="dash-hero-top">
+          <div>
+            <p class="dash-greeting">Kia ora, Phoebe</p>
+            <h1 class="dash-title">Ready to skate?</h1>
+          </div>
+        </div>
+        <div class="dash-hero-progress">
+          <div class="dp-pct-ring">
+            <svg viewBox="0 0 80 80" width="80" height="80">
+              <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="6"/>
+              <circle cx="40" cy="40" r="34" fill="none" stroke="white" stroke-width="6" stroke-linecap="round"
+                stroke-dasharray="${Math.round(2 * Math.PI * 34)}" stroke-dashoffset="${Math.round(2 * Math.PI * 34 * (1 - pct / 100))}"
+                transform="rotate(-90 40 40)"/>
+            </svg>
+            <span class="dp-pct-text">${pct}%</span>
+          </div>
+          <div class="dp-stats">
+            <div class="dp-stat"><span class="dp-stat-val">${mastered}</span><span class="dp-stat-lbl">Mastered</span></div>
+            <div class="dp-stat"><span class="dp-stat-val">${workingOn}</span><span class="dp-stat-lbl">Working On</span></div>
+            <div class="dp-stat"><span class="dp-stat-val">${badgesComplete}<span class="dp-stat-sub">/${ALL_BADGES.length}</span></span><span class="dp-stat-lbl">Badges</span></div>
+          </div>
+        </div>
+      </div>`;
+
+    // --- 2. Next Badge ---
     let nextBadge = null, nextMastered = 0;
     outer: for (const group of SKILL_GROUPS) {
       for (const badge of group.badges) {
@@ -673,56 +989,304 @@ Respond ONLY with a valid JSON object in exactly this structure:
         if (m < badge.skills.length) { nextBadge = badge; nextMastered = m; break outer; }
       }
     }
-
-    // Find last edited skill
-    const lastEdit = loadLastEdit();
-    let lastBadge = null, lastSkillName = null;
-    if (lastEdit) {
-      lastBadge = ALL_BADGES.find(b => b.id === lastEdit.badgeId);
-      if (lastBadge && lastEdit.skillIdx < lastBadge.skills.length) {
-        lastSkillName = lastBadge.skills[lastEdit.skillIdx];
-      }
-    }
-
-    if (!nextBadge && !lastSkillName) { el.innerHTML = ''; return; }
-
-    let inner = '';
-
     if (nextBadge) {
-      const pct = Math.round((nextMastered / nextBadge.skills.length) * 100);
-      inner += `
-        <div class="dsc-lbl">Next Badge</div>
-        <div class="dsc-row">
-          <span class="dsc-badge-icon">${nextBadge.icon}</span>
-          <div class="dsc-info"><span class="dsc-badge-name">${nextBadge.name}</span></div>
-          <span class="dsc-fraction">${nextMastered}/${nextBadge.skills.length}</span>
-        </div>
-        <div class="dsc-mini-bar"><div class="progress-bar-wrap"><div class="progress-bar" style="width:${pct}%"></div></div></div>`;
-    }
-
-    if (nextBadge && lastSkillName) {
-      inner += '<div class="dsc-divider"></div>';
-    }
-
-    if (lastSkillName) {
-      const filled = lastEdit.stars;
-      const starsHTML = [1,2,3].map(n =>
-        `<span${n > filled ? ' class="empty"' : ''}>★</span>`
-      ).join('');
-      inner += `
-        <div class="dsc-lbl">Last Rated</div>
-        <div class="dsc-last-row">
-          <span class="dsc-stars">${starsHTML}</span>
-          <div>
-            <span class="dsc-skill-name">${lastSkillName}</span>
-            <span class="dsc-badge-sub">${lastBadge.name}</span>
+      const nbPct = Math.round((nextMastered / nextBadge.skills.length) * 100);
+      const nc = BADGE_COLORS[nextBadge.id] || { bg: 'var(--accent-soft)', bar: 'var(--accent)' };
+      html += `
+        <div class="card dash-next-badge">
+          <div class="dnb-top">
+            <span class="dnb-icon" style="background:${nc.bg}">${nextBadge.icon}</span>
+            <div class="dnb-info">
+              <span class="dnb-label">Next Badge</span>
+              <span class="dnb-name">${nextBadge.name}</span>
+            </div>
+            <span class="dnb-frac">${nextMastered}/${nextBadge.skills.length}</span>
           </div>
+          <div class="progress-bar-wrap"><div class="progress-bar" style="width:${nbPct}%;background:${nc.bar}"></div></div>
         </div>`;
     }
 
-    el.innerHTML = `
-      <div class="section-label" style="margin-top:20px">Skills Progress</div>
-      <div class="card dash-skills-card">${inner}</div>`;
+    // --- 3. Recent Workouts (up to 3) — shown before Working On for quick access ---
+    const workouts = loadWorkouts();
+    html += `<div class="section-label">Recent Workouts</div>`;
+    if (workouts.length > 0) {
+      const recent = workouts.slice(0, 3);
+      const wHTML = recent.map(w => {
+        const mins = totalWorkoutMins(w.items);
+        return `
+          <div class="dw-workout" data-workout-id="${w.id}">
+            <div class="dw-workout-info">
+              <span class="dw-workout-name">${w.name}</span>
+              <span class="dw-workout-meta">${w.items.length} skill${w.items.length !== 1 ? 's' : ''} &middot; ${mins} min</span>
+            </div>
+            <svg class="dw-workout-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>`;
+      }).join('');
+      html += `<div class="card dash-workouts-card">${wHTML}</div>`;
+    } else {
+      html += `<div class="card dash-empty-card"><span class="dash-empty-text">No workouts yet. Tap Workouts to create one!</span></div>`;
+    }
+
+    // --- 4. Working On Skills (collapsible, after workouts) ---
+    const workingItems = [];
+    SKILL_GROUPS.forEach(g => g.badges.forEach(badge => {
+      badge.skills.forEach((skillName, i) => {
+        if (getSkillData(state, badge.id, i).working) {
+          workingItems.push({ badge, skillName, idx: i });
+        }
+      });
+    }));
+
+    if (workingItems.length > 0) {
+      const cs = loadCollapseState();
+      const dwCollapsed = cs['_dash_working'] !== false; // collapsed by default
+      const itemsHTML = workingItems.map(({ badge, skillName, idx }) => {
+        const stars = getSkillData(state, badge.id, idx).stars;
+        const dwStars = [1,2,3].map(n =>
+          `<span class="dw-star${stars >= n ? ' filled' : ''}">★</span>`
+        ).join('');
+        return `
+          <div class="dw-item" data-badge="${badge.id}" data-skill="${idx}">
+            <div class="dw-item-info">
+              <span class="dw-item-name">${skillName}</span>
+              <span class="dw-item-badge">${badge.name}</span>
+            </div>
+            <span class="dw-stars">${dwStars}</span>
+            <span class="sr-bookmark active">${BOOKMARK_SVG}</span>
+          </div>`;
+      }).join('');
+      html += `
+        <div class="section-label">Working On <span class="section-label-count">${workingItems.length}</span></div>
+        <div class="card dash-working-card">
+          <button class="dw-collapse-btn" id="dw-working-toggle" type="button">
+            <span>${dwCollapsed ? 'Show all' : 'Hide'}</span>
+            <svg class="dw-collapse-chevron${dwCollapsed ? '' : ' open'}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="dw-working-list" id="dw-working-list" style="${dwCollapsed ? 'max-height:0;overflow:hidden;' : ''}">${itemsHTML}</div>
+        </div>`;
+    }
+
+    el.innerHTML = html;
+
+    // --- Event delegation for dashboard ---
+    el.onclick = e => {
+      // Working On collapse toggle
+      const toggleBtn = e.target.closest('#dw-working-toggle');
+      if (toggleBtn) {
+        const list = document.getElementById('dw-working-list');
+        const cs = loadCollapseState();
+        const isCollapsed = cs['_dash_working'] !== false;
+        if (isCollapsed) {
+          list.style.maxHeight = list.scrollHeight + 'px';
+          list.style.overflow = '';
+          toggleBtn.querySelector('span').textContent = 'Hide';
+          toggleBtn.querySelector('svg').classList.add('open');
+          cs['_dash_working'] = false;
+        } else {
+          list.style.maxHeight = list.scrollHeight + 'px';
+          requestAnimationFrame(() => { list.style.maxHeight = '0'; list.style.overflow = 'hidden'; });
+          toggleBtn.querySelector('span').textContent = 'Show all';
+          toggleBtn.querySelector('svg').classList.remove('open');
+          cs['_dash_working'] = true;
+        }
+        saveCollapseState(cs);
+        return;
+      }
+      // Working On skill tap → open skill detail
+      const dwItem = e.target.closest('.dw-item');
+      if (dwItem) {
+        showSkillDetail(dwItem.dataset.badge, +dwItem.dataset.skill);
+        return;
+      }
+      // Workout tap → open workout detail
+      const wkItem = e.target.closest('.dw-workout');
+      if (wkItem) {
+        const entry = loadWorkouts().find(w => w.id === +wkItem.dataset.workoutId);
+        if (entry) showWorkoutDetail(entry);
+        return;
+      }
+    };
+  }
+
+  // ============================================================
+  // SKILLS — DETAIL PANEL
+  // ============================================================
+  function initSkillDetail() {
+    const overlay = document.createElement('div');
+    overlay.className = 'skill-detail-overlay';
+    overlay.id = 'skill-detail-overlay';
+    overlay.innerHTML = `
+      <div class="sd-header">
+        <button class="sd-close" id="sd-close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="sd-header-info">
+          <div class="sd-title" id="sd-title"></div>
+          <div class="sd-badge-name" id="sd-badge-name"></div>
+        </div>
+      </div>
+      <div class="sd-scroll" id="sd-scroll"></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#sd-close').addEventListener('click', closeSkillDetail);
+  }
+
+  function closeSkillDetail() {
+    document.getElementById('skill-detail-overlay').classList.remove('open');
+  }
+
+  function showSkillDetail(badgeId, idx) {
+    const badge = ALL_BADGES.find(b => b.id === badgeId);
+    if (!badge || idx >= badge.skills.length) return;
+    const skillName = badge.skills[idx];
+    const state = loadSkillsState();
+    const { stars, working } = getSkillData(state, badgeId, idx);
+    const notes = getSkillNotes(badgeId, idx);
+
+    const overlay = document.getElementById('skill-detail-overlay');
+    overlay.querySelector('#sd-title').textContent = skillName;
+    overlay.querySelector('#sd-badge-name').textContent = badge.name;
+
+    const starsHTML = [1, 2, 3].map(n =>
+      `<button class="sd-star-btn${stars >= n ? ' filled' : ''}" data-star="${n}" type="button">${STAR_SVG}</button>`
+    ).join('');
+
+    const searchTerm = encodeURIComponent(`how to ${skillName} figure skating`);
+
+    const notesHTML = notes.length > 0
+      ? notes.map(n => {
+          const dateStr = new Date(n.date).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' });
+          const escaped = n.text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+          return `
+            <div class="sd-note" data-note-id="${n.id}">
+              <div class="sd-note-text">${escaped}</div>
+              <div class="sd-note-footer">
+                <span class="sd-note-date">${dateStr}</span>
+                <button class="sd-note-delete" data-note-id="${n.id}" type="button">Delete</button>
+              </div>
+            </div>`;
+        }).join('')
+      : '<div class="sd-notes-empty">No notes yet. Add coaching tips, exercises, or reminders below.</div>';
+
+    const scrollEl = overlay.querySelector('#sd-scroll');
+    scrollEl.innerHTML = `
+      <div class="sd-toolbar">
+        <div class="sd-toolbar-section">
+          <div class="sd-section-label">Kiwi Skate Progression</div>
+          <div class="sd-stars" id="sd-stars" data-badge="${badgeId}" data-skill="${idx}">${starsHTML}</div>
+        </div>
+        <div class="sd-toolbar-actions">
+          <button class="sd-action-btn sd-bookmark-btn${working ? ' active' : ''}" id="sd-working-toggle" data-badge="${badgeId}" data-skill="${idx}" type="button" title="${working ? 'Working on this' : 'Mark as working on it'}">
+            ${BOOKMARK_SVG}
+          </button>
+          <a class="sd-action-btn sd-yt-btn" href="https://www.youtube.com/results?search_query=${searchTerm}" target="_blank" rel="noopener" title="Tutorial on YouTube">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.5 31.5 0 0 0 0 12a31.5 31.5 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.5 31.5 0 0 0 24 12a31.5 31.5 0 0 0-.5-5.8zM9.6 15.6V8.4l6.3 3.6-6.3 3.6z"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="sd-section">
+        <div class="sd-section-label">Notes & Coaching Tips</div>
+        <div class="sd-note-input-wrap">
+          <textarea class="sd-note-input" id="sd-note-input" placeholder="Add a note (coaching tip, exercise, reminder...)" rows="3"></textarea>
+          <button class="sd-note-add" id="sd-note-add" type="button">Add Note</button>
+        </div>
+        <div class="sd-notes-list" id="sd-notes-list" data-badge="${badgeId}" data-skill="${idx}">${notesHTML}</div>
+      </div>`;
+
+    // Scroll to top
+    scrollEl.scrollTop = 0;
+    overlay.classList.add('open');
+
+    // Re-bind delegated events inside the scroll area
+    scrollEl.onclick = e => {
+      // Star buttons
+      const starBtn = e.target.closest('.sd-star-btn');
+      if (starBtn) {
+        const newStar = +starBtn.dataset.star;
+        const st = loadSkillsState();
+        const d = ensureSkillEntry(st, badgeId, +idx);
+        d.stars = d.stars === newStar ? newStar - 1 : newStar;
+        saveSkillsState(st);
+        saveLastEdit(badgeId, +idx, d.stars);
+        scrollEl.querySelectorAll('.sd-star-btn').forEach(btn => {
+          btn.classList.toggle('filled', +btn.dataset.star <= d.stars);
+        });
+        // Update the skill row behind the overlay
+        refreshSkillRow(badgeId, idx);
+        updateBadgePill(badgeId, st);
+        updateSummaryCard(st);
+        renderDashboard();
+        return;
+      }
+      // Working toggle
+      if (e.target.closest('#sd-working-toggle')) {
+        toggleWorking(badgeId, idx);
+        const st = loadSkillsState();
+        const w = getSkillData(st, badgeId, idx).working;
+        const btn = scrollEl.querySelector('#sd-working-toggle');
+        btn.classList.toggle('active', w);
+        btn.title = w ? 'Working on this' : 'Mark as working on it';
+        return;
+      }
+      // Add note
+      if (e.target.closest('#sd-note-add')) {
+        const input = scrollEl.querySelector('#sd-note-input');
+        const text = input.value.trim();
+        if (!text) return;
+        addSkillNote(badgeId, idx, text);
+        input.value = '';
+        refreshNotesInDetail(badgeId, idx);
+        refreshSkillRow(badgeId, idx);
+        return;
+      }
+      // Delete note
+      const delBtn = e.target.closest('.sd-note-delete');
+      if (delBtn) {
+        deleteSkillNote(badgeId, idx, +delBtn.dataset.noteId);
+        refreshNotesInDetail(badgeId, idx);
+        refreshSkillRow(badgeId, idx);
+        return;
+      }
+    };
+  }
+
+  function refreshNotesInDetail(badgeId, idx) {
+    const notesList = document.getElementById('sd-notes-list');
+    if (!notesList) return;
+    const notes = getSkillNotes(badgeId, idx);
+    if (notes.length === 0) {
+      notesList.innerHTML = '<div class="sd-notes-empty">No notes yet. Add coaching tips, exercises, or reminders below.</div>';
+      return;
+    }
+    notesList.innerHTML = notes.map(n => {
+      const dateStr = new Date(n.date).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' });
+      const escaped = n.text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      return `
+        <div class="sd-note" data-note-id="${n.id}">
+          <div class="sd-note-text">${escaped}</div>
+          <div class="sd-note-footer">
+            <span class="sd-note-date">${dateStr}</span>
+            <button class="sd-note-delete" data-note-id="${n.id}" type="button">Delete</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function refreshSkillRow(badgeId, idx) {
+    const row = document.querySelector(`.skill-row[data-badge="${badgeId}"][data-skill="${idx}"]`);
+    if (!row) return;
+    const badge = ALL_BADGES.find(b => b.id === badgeId);
+    if (!badge) return;
+    const state = loadSkillsState();
+    const { stars, working } = getSkillData(state, badgeId, idx);
+    const notes = getSkillNotes(badgeId, idx);
+    row.classList.toggle('is-working', working);
+    row.classList.toggle('is-mastered', stars === 3);
+    // Update mini stars
+    const miniStars = row.querySelectorAll('.sk-mini-star');
+    miniStars.forEach((el, i) => el.classList.toggle('filled', stars >= i + 1));
+    // Update bookmark
+    const bookmark = row.querySelector('.sk-bookmark');
+    if (bookmark) bookmark.classList.toggle('active', working);
   }
 
   // ============================================================
@@ -738,13 +1302,13 @@ Respond ONLY with a valid JSON object in exactly this structure:
     const row = document.querySelector(`.skill-row[data-badge="${badgeId}"][data-skill="${idx}"]`);
     if (row) {
       row.classList.toggle('is-working', d.working);
-      const btn = row.querySelector('.working-btn');
-      if (btn) btn.classList.toggle('active', d.working);
+      const bk = row.querySelector('.sk-bookmark');
+      if (bk) bk.classList.toggle('active', d.working);
     }
 
     renderWorkingSection(state);
     updateSummaryCard(state);
-    renderDashSkills(state);
+    renderDashboard();
   }
 
   // ============================================================
@@ -786,7 +1350,7 @@ Respond ONLY with a valid JSON object in exactly this structure:
 
     updateSummaryCard(state);
     renderWorkingSection(state);
-    renderDashSkills(state);
+    renderDashboard();
 
     // Initialise expanded heights without animation
     list.querySelectorAll('.badge-section.expanded .badge-body').forEach(body => {
@@ -799,29 +1363,10 @@ Respond ONLY with a valid JSON object in exactly this structure:
 
     // ---- Delegated listener: badge list ----
     list.addEventListener('click', e => {
-      // Star button
-      const starBtn = e.target.closest('.star-btn');
-      if (starBtn) {
-        const { badge: badgeId, skill: idx, star } = starBtn.dataset;
-        const state = loadSkillsState();
-        const d = ensureSkillEntry(state, badgeId, +idx);
-        d.stars = d.stars === +star ? +star - 1 : +star;
-        saveSkillsState(state);
-        saveLastEdit(badgeId, +idx, d.stars);
-
-        starBtn.closest('.sk-stars').querySelectorAll('.star-btn').forEach(btn => {
-          btn.classList.toggle('filled', +btn.dataset.star <= d.stars);
-        });
-        updateBadgePill(badgeId, state);
-        updateSummaryCard(state);
-        renderDashSkills(state);
-        return;
-      }
-
-      // Working on it button (in skill rows)
-      const workBtn = e.target.closest('.working-btn');
-      if (workBtn) {
-        toggleWorking(workBtn.dataset.badge, workBtn.dataset.skill);
+      // Skill row tap — open detail panel
+      const row = e.target.closest('.skill-row');
+      if (row) {
+        showSkillDetail(row.dataset.badge, +row.dataset.skill);
         return;
       }
 
@@ -838,17 +1383,101 @@ Respond ONLY with a valid JSON object in exactly this structure:
       }
     });
 
-    // ---- Delegated listener: working section (remove buttons) ----
+    // ---- Delegated listener: working section (collapse toggle + remove buttons) ----
     const wsEl = document.getElementById('working-section');
     if (wsEl) {
       wsEl.addEventListener('click', e => {
         const btn = e.target.closest('.ws-remove');
-        if (btn) toggleWorking(btn.dataset.badge, btn.dataset.skill);
+        if (btn) { toggleWorking(btn.dataset.badge, btn.dataset.skill); return; }
+
+        const item = e.target.closest('.ws-item');
+        if (item) { showSkillDetail(item.dataset.badge, +item.dataset.skill); return; }
+
+        if (e.target.closest('#ws-toggle-btn')) {
+          const cs = loadCollapseState();
+          cs['_working'] = !cs['_working'];
+          saveCollapseState(cs);
+          const listEl  = document.getElementById('ws-list');
+          const chevron = wsEl.querySelector('.ws-chevron');
+          if (!listEl) return;
+          if (cs['_working']) {
+            listEl.style.maxHeight = listEl.scrollHeight + 'px';
+            listEl.style.overflow  = 'hidden';
+            listEl.style.transition = 'max-height 0.3s ease';
+            requestAnimationFrame(() => requestAnimationFrame(() => { listEl.style.maxHeight = '0'; }));
+            if (chevron) chevron.classList.add('collapsed');
+          } else {
+            listEl.style.transition = 'max-height 0.3s ease';
+            listEl.style.maxHeight  = listEl.scrollHeight + 'px';
+            listEl.addEventListener('transitionend', () => {
+              listEl.style.maxHeight  = 'none';
+              listEl.style.overflow   = '';
+              listEl.style.transition = '';
+            }, { once: true });
+            if (chevron) chevron.classList.remove('collapsed');
+          }
+        }
+      });
+    }
+
+    // ---- Skills search ----
+    const searchInput = document.getElementById('skills-search');
+    const searchResults = document.getElementById('skills-search-results');
+    const workingSec = document.getElementById('working-section');
+    if (searchInput && searchResults) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        if (!q) {
+          searchResults.style.display = 'none';
+          searchResults.innerHTML = '';
+          list.style.display = '';
+          if (workingSec) workingSec.style.display = '';
+          return;
+        }
+        list.style.display = 'none';
+        if (workingSec) workingSec.style.display = 'none';
+        const st = loadSkillsState();
+        const matches = [];
+        SKILL_GROUPS.forEach(g => g.badges.forEach(badge => {
+          badge.skills.forEach((skillName, i) => {
+            if (skillName.toLowerCase().includes(q)) {
+              matches.push({ badge, skillName, idx: i });
+            }
+          });
+        }));
+        if (matches.length === 0) {
+          searchResults.innerHTML = '<div class="search-no-results">No skills found</div>';
+        } else {
+          searchResults.innerHTML = matches.map(({ badge, skillName, idx }) => {
+            const { stars, working } = getSkillData(st, badge.id, idx);
+            const starHTML = [1,2,3].map(n =>
+              `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`
+            ).join('');
+            return `
+              <div class="search-result-item" data-badge="${badge.id}" data-skill="${idx}">
+                <div class="sr-info">
+                  <span class="sr-name">${skillName}</span>
+                  <span class="sr-badge">${badge.name}</span>
+                </div>
+                <span class="sr-stars">${starHTML}</span>
+                <span class="sr-bookmark${working ? ' active' : ''}">${BOOKMARK_SVG}</span>
+              </div>`;
+          }).join('');
+        }
+        searchResults.style.display = '';
+      });
+      searchResults.addEventListener('click', e => {
+        const item = e.target.closest('.search-result-item');
+        if (item) showSkillDetail(item.dataset.badge, +item.dataset.skill);
       });
     }
   }
 
+  initSkillDetail();
   initSkills();
-  initKiwiBot();
+  initWorkouts();
+
+  // Pull latest data from Supabase (runs in background, updates UI if anything changed)
+  syncFromCloud();
 
 })();
