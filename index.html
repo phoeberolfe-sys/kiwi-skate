@@ -40,6 +40,9 @@
         <div class="skills-search-wrap">
           <svg class="skills-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="text" class="skills-search" id="skills-search" placeholder="Search skills..." autocomplete="off" />
+          <button class="skills-search-clear" id="skills-search-clear" type="button" aria-label="Clear search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
         <!-- Search results -->
         <div id="skills-search-results" style="display:none"></div>
@@ -47,6 +50,8 @@
         <div id="working-section"></div>
         <!-- Badge sections — populated by JS -->
         <div id="skills-list"></div>
+        <!-- Custom skills — populated by JS -->
+        <div id="custom-skills-section"></div>
       </div>
     </section>
 

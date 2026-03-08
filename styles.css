@@ -781,7 +781,7 @@ html, body {
 }
 .skills-search {
   width: 100%;
-  padding: 12px 14px 12px 40px;
+  padding: 12px 40px 12px 40px;
   border: none;
   border-radius: 14px;
   font-size: 15px;
@@ -796,6 +796,27 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(100, 80, 200, 0.08);
 }
 .skills-search::placeholder { color: var(--text-2); }
+
+.skills-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.06);
+  color: var(--text-2);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.skills-search-clear.visible { display: flex; }
+.skills-search-clear:active { background: rgba(0,0,0,0.1); }
 
 #skills-search-results {
   display: flex;
@@ -1039,6 +1060,77 @@ html, body {
   opacity: 1;
 }
 .sk-bookmark.active path { fill: currentColor; opacity: 0.75; }
+
+/* TP tag */
+.sk-tp-tag, .sp-tp-tag {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  background: rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+/* TP divider inside badge body */
+.tp-divider {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  padding: 12px 4px 4px;
+}
+
+/* TP skill rows — slightly muted */
+.skill-row.is-tp {
+  opacity: 0.7;
+}
+
+/* Custom skills section */
+.custom-skills-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.custom-skill-input {
+  flex: 1;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 14px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg-card);
+  color: var(--text-1);
+  outline: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  transition: box-shadow 0.2s;
+}
+.custom-skill-input:focus {
+  box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(0,0,0,0.05);
+}
+.custom-skill-input::placeholder { color: var(--text-2); }
+.custom-skill-add-btn {
+  padding: 12px 20px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.custom-skill-add-btn:active { opacity: 0.85; }
+.custom-skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 /* =========================================================
    Skills — Working On It Button (icon only)
@@ -1424,6 +1516,30 @@ html, body {
   flex-shrink: 0;
   align-items: center;
 }
+/* Mastery date */
+.sd-mastery-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sd-mastery-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+}
+.sd-mastery-input {
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-2);
+  background: rgba(0,0,0,0.04);
+  border: none;
+  border-radius: 8px;
+  padding: 4px 8px;
+  outline: none;
+}
+.sd-mastery-input:focus { box-shadow: 0 0 0 2px var(--accent); }
+
 .sd-action-btn {
   width: 44px;
   height: 44px;
@@ -1745,9 +1861,21 @@ html, body {
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .wb-item-drag {
-  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
   flex-shrink: 0;
-  opacity: 0.4;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.wb-item-drag:active { color: var(--text-2); }
+.wb-dragging {
+  opacity: 0.85;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  z-index: 10;
 }
 .wb-item-info { flex: 1; min-width: 0; }
 .wb-item-name {

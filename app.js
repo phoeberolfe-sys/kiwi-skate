@@ -53,7 +53,8 @@
     if (!sb) return;
     const keys = [
       'kiwiskate-workouts-v2', 'kiwiskate-skills-v1',
-      'kiwiskate-collapse-v1', 'kiwiskate-last-edit-v1', 'kiwiskate-notes-v1'
+      'kiwiskate-collapse-v1', 'kiwiskate-last-edit-v1', 'kiwiskate-notes-v1',
+      'kiwiskate-custom-skills-v1'
     ];
     for (const key of keys) {
       const raw = localStorage.getItem(key);
@@ -315,7 +316,7 @@
       const badgeName = badge ? badge.name : '';
       return `
         <div class="wb-item" data-idx="${i}">
-          <div class="wb-item-drag">
+          <div class="wb-item-drag" data-idx="${i}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
           </div>
           <div class="wb-item-info">
@@ -350,6 +351,67 @@
         renderBuilderItems();
       }
     };
+
+    // Touch drag reorder
+    el.querySelectorAll('.wb-item-drag').forEach(handle => {
+      handle.addEventListener('touchstart', e => {
+        e.preventDefault();
+        const dragIdx = +handle.dataset.idx;
+        const item = handle.closest('.wb-item');
+        const items = Array.from(el.querySelectorAll('.wb-item'));
+        const rects = items.map(it => it.getBoundingClientRect());
+        const itemH = rects[0].height;
+        const startY = e.touches[0].clientY;
+        let currentIdx = dragIdx;
+
+        item.classList.add('wb-dragging');
+        item.style.zIndex = '10';
+
+        const onMove = ev => {
+          const dy = ev.touches[0].clientY - startY;
+          item.style.transform = `translateY(${dy}px)`;
+
+          // Determine new position
+          const midY = rects[dragIdx].top + rects[dragIdx].height / 2 + dy;
+          let newIdx = dragIdx;
+          for (let i = 0; i < rects.length; i++) {
+            if (midY > rects[i].top + rects[i].height / 2) newIdx = i;
+          }
+          if (newIdx !== currentIdx) {
+            // Shift other items visually
+            items.forEach((it, i) => {
+              if (i === dragIdx) return;
+              if (dragIdx < newIdx && i > dragIdx && i <= newIdx) {
+                it.style.transform = `translateY(${-itemH}px)`;
+              } else if (dragIdx > newIdx && i >= newIdx && i < dragIdx) {
+                it.style.transform = `translateY(${itemH}px)`;
+              } else {
+                it.style.transform = '';
+              }
+            });
+            currentIdx = newIdx;
+          }
+        };
+
+        const onEnd = () => {
+          document.removeEventListener('touchmove', onMove);
+          document.removeEventListener('touchend', onEnd);
+          item.classList.remove('wb-dragging');
+          item.style.zIndex = '';
+          item.style.transform = '';
+          items.forEach(it => { it.style.transform = ''; });
+
+          if (currentIdx !== dragIdx) {
+            const [moved] = builderItems.splice(dragIdx, 1);
+            builderItems.splice(currentIdx, 0, moved);
+            renderBuilderItems();
+          }
+        };
+
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onEnd);
+      }, { passive: false });
+    });
   }
 
   function saveFromBuilder() {
@@ -430,13 +492,25 @@
 
       group.badges.forEach(badge => {
         let badgeSkills = '';
+        // Assessed skills
         badge.skills.forEach((skill, idx) => {
           if (q && !skill.toLowerCase().includes(q) && !badge.name.toLowerCase().includes(q)) return;
-          // Check if already in workout
           const alreadyAdded = builderItems.some(item => item.badgeId === badge.id && item.skillIdx === idx);
           badgeSkills += `
             <button class="sp-skill${alreadyAdded ? ' sp-skill-added' : ''}" data-badge="${badge.id}" data-idx="${idx}" data-name="${skill.replace(/"/g, '&quot;')}" type="button"${alreadyAdded ? ' disabled' : ''}>
               <span class="sp-skill-name">${skill}</span>
+              ${alreadyAdded ? '<span class="sp-skill-check">Added</span>' : '<span class="sp-skill-add">+</span>'}
+            </button>`;
+        });
+        // TP skills
+        (badge.tpSkills || []).forEach((skill, idx) => {
+          if (q && !skill.toLowerCase().includes(q) && !badge.name.toLowerCase().includes(q)) return;
+          const tpIdx = 'tp:' + idx;
+          const alreadyAdded = builderItems.some(item => item.badgeId === badge.id && item.skillIdx === tpIdx);
+          badgeSkills += `
+            <button class="sp-skill${alreadyAdded ? ' sp-skill-added' : ''}" data-badge="${badge.id}" data-idx="${tpIdx}" data-name="${skill.replace(/"/g, '&quot;')}" type="button"${alreadyAdded ? ' disabled' : ''}>
+              <span class="sp-skill-name">${skill}</span>
+              <span class="sp-tp-tag">TP</span>
               ${alreadyAdded ? '<span class="sp-skill-check">Added</span>' : '<span class="sp-skill-add">+</span>'}
             </button>`;
         });
@@ -455,6 +529,22 @@
       }
     });
 
+    // Custom skills
+    const customs = loadCustomSkills();
+    let customHTML = '';
+    customs.forEach(cs => {
+      if (q && !cs.name.toLowerCase().includes(q)) return;
+      const alreadyAdded = builderItems.some(item => item.badgeId === '_custom' && item.skillIdx === cs.id);
+      customHTML += `
+        <button class="sp-skill${alreadyAdded ? ' sp-skill-added' : ''}" data-badge="_custom" data-idx="${cs.id}" data-name="${cs.name.replace(/"/g, '&quot;')}" type="button"${alreadyAdded ? ' disabled' : ''}>
+          <span class="sp-skill-name">${cs.name}</span>
+          ${alreadyAdded ? '<span class="sp-skill-check">Added</span>' : '<span class="sp-skill-add">+</span>'}
+        </button>`;
+    });
+    if (customHTML) {
+      html += `<div class="sp-group-label">Custom Skills</div>${customHTML}`;
+    }
+
     if (!html) {
       html = '<div class="sp-no-results">No matching skills found</div>';
     }
@@ -465,15 +555,15 @@
       const btn = e.target.closest('.sp-skill:not(.sp-skill-added)');
       if (!btn) return;
       const badgeId = btn.dataset.badge;
-      const idx = +btn.dataset.idx;
+      const rawIdx = btn.dataset.idx;
+      const idx = rawIdx.startsWith('tp:') || rawIdx.startsWith('custom:') ? rawIdx : +rawIdx;
       const skillName = btn.dataset.name;
       builderItems.push({ badgeId, skillIdx: idx, skillName, minutes: 5 });
       renderBuilderItems();
-      // Mark as added
       btn.classList.add('sp-skill-added');
       btn.disabled = true;
-      btn.querySelector('.sp-skill-add').textContent = 'Added';
-      btn.querySelector('.sp-skill-add').className = 'sp-skill-check';
+      const addEl = btn.querySelector('.sp-skill-add');
+      if (addEl) { addEl.textContent = 'Added'; addEl.className = 'sp-skill-check'; }
     };
   }
 
@@ -538,6 +628,15 @@
             'Backward marching',
             'Forward double sculling',
           ],
+          tpSkills: [
+            'Proper way to fall and get up',
+            'Marching across ice with high knees',
+            'Quarter bend turns; half bend turns',
+            '360 degree marching on the spot',
+            'Forward two foot glide on a straight line',
+            'Two foot turn from forwards to backwards in place',
+            'Back two-foot glide on a straight line',
+          ],
         },
         {
           id: 'elementary', name: 'Elementary Badge', icon: '🌿',
@@ -549,6 +648,15 @@
             'Half snow plough stops (both feet)',
             'Forward pumping around circle',
           ],
+          tpSkills: [
+            'Rhythm skating: 2 counts per glide',
+            'Backward two foot sculling',
+            'Slalom',
+            'Forward one-foot glides in a straight line',
+            '360 degree turns on the spot with spiralling edge',
+            'Roll up on toes',
+            'Backward two-foot gliding on a curve',
+          ],
         },
         {
           id: 'basic', name: 'Basic Badge', icon: '🔵',
@@ -556,19 +664,36 @@
             'Two-foot turns on curve (forward to backward)',
             'Forward crossovers on a circle',
             'Backwards half snow plough (both feet)',
-            'Backward skating using alternating "C" pushes',
+            'Backward skating using alternating "C" pushes with lift',
             'Forward inside edges',
+          ],
+          tpSkills: [
+            'Forward skating: four counts per glide, half snow plough stop',
+            'Forward one foot glide on a curve (with foot passing)',
+            'Backward one-foot glide',
+            'Walk on toes and heels',
+            'Backward pumping around a circle (outside and inside)',
+            'Two-foot jump on the spot',
           ],
         },
         {
           id: 'novice1', name: 'Novice 1 Badge', icon: '⭐',
           skills: [
-            'Backward pumping on a circle (outside and inside)',
             'Forward outside edges',
             'Forward outside three turns',
             'Back inside Mohawks',
             'Backward one-foot glides around a circle',
             'BO to FO Mohawks',
+          ],
+          tpSkills: [
+            'Forward Russian stroking',
+            'Two foot spin from spiralling edge',
+            'Drag',
+            'Backward two-foot snowplough stop',
+            'Side hops',
+            'Backward crossovers',
+            'Backward one-foot glides on a curve with lift',
+            'Forward pivot with toe in ice',
           ],
         },
         {
@@ -577,19 +702,38 @@
             'Forward inside Mohawk',
             'Forward spiral on a curve',
             'Forward inside three turns',
-            'Backward crossovers',
+            'Forward and backward crossovers (two counts per glide)',
             'Forward two foot parallel side stop (left and right)',
             'Back outside edges',
+          ],
+          tpSkills: [
+            'Backward C pushes on a curve with foot in front and passing behind',
+            'Two foot jump forwards to backwards',
+            'Forward spiral',
+            'Inside spread eagle',
+            'Cross rolls',
+            'Forward and backward two-foot slalom',
+            'Backward pivot with toe in ice',
           ],
         },
         {
           id: 'advanced', name: 'Advanced Badge', icon: '🏆',
           skills: [
-            'Backward spirals on a curve',
             'Backward inside edges',
             'Backward outside three turns',
             'Backward inside three turns',
             '"T" stops',
+            'Forward and backwards crossovers in a figure eight pattern',
+            'Forward circle pattern 1 – two crossovers into a forward outside three-turn',
+            'Forward circle pattern 2 – two crossovers step into a forward inside three-turn',
+            'Forward circle pattern 3 – two crossovers into a forward inside mohawk',
+          ],
+          tpSkills: [
+            'Backward two-foot turn on a curve',
+            'One-foot slalom (forwards and backwards)',
+            'Ballet hops/quick starts',
+            'Pivot turn/two-foot bracket turn',
+            'Marching spin',
           ],
         },
       ],
@@ -616,10 +760,19 @@
             'Forward outside eight',
             'Forward inside eight',
           ],
+          tpSkills: [
+            'Inside brackets',
+            'Outside brackets',
+          ],
         },
         {
           id: 'figure3', name: 'Figure 3 Badge', icon: '🔮',
           skills: ['Waltz eight'],
+          tpSkills: [
+            'Inside counters',
+            'Outside counters',
+            'Twizzles',
+          ],
         },
         {
           id: 'figure4', name: 'Figure 4 Badge', icon: '💎',
@@ -627,6 +780,11 @@
             'FO – FI Change curve',
             'FI – FO Change curve',
             'Backward outside eight',
+          ],
+          tpSkills: [
+            'Inside rockers',
+            'Outside rockers',
+            'Forward outside and inside loops',
           ],
         },
       ],
@@ -646,6 +804,11 @@
             'One foot spin (3 revolutions with correct entry)',
             'Width of rink step sequence (min. two different turns and three different steps)',
           ],
+          tpSkills: [
+            'Backwards straight toe jump',
+            'Marching spin (2 rotations)',
+            'Tea pot – forwards/backwards',
+          ],
         },
         {
           id: 'fs2', name: 'Free Skating 2 Badge', icon: '🦋',
@@ -657,6 +820,10 @@
             'Inside Ina Bauer or forward inside spread eagle',
             'Jump combination: waltz jump / toe loop jump',
             'Width of rink step sequence (min. three different turns and four different steps)',
+          ],
+          tpSkills: [
+            '360 degree two foot jump on the spot',
+            '2-foot spin in sitting position',
           ],
         },
         {
@@ -766,6 +933,29 @@
   }
 
   // ============================================================
+  // SKILLS — CUSTOM SKILLS (localStorage)
+  // ============================================================
+  const CUSTOM_SKILLS_KEY = 'kiwiskate-custom-skills-v1';
+
+  function loadCustomSkills() {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_SKILLS_KEY)) || []; } catch { return []; }
+  }
+  function saveCustomSkills(arr) {
+    localStorage.setItem(CUSTOM_SKILLS_KEY, JSON.stringify(arr));
+    syncToCloud(CUSTOM_SKILLS_KEY, arr);
+  }
+  function addCustomSkill(name) {
+    const arr = loadCustomSkills();
+    const id = 'custom:' + Date.now();
+    arr.push({ id, name });
+    saveCustomSkills(arr);
+    return id;
+  }
+  function deleteCustomSkill(id) {
+    saveCustomSkills(loadCustomSkills().filter(s => s.id !== id));
+  }
+
+  // ============================================================
   // SKILLS — BUILD HTML
   // ============================================================
   function buildSkillRowHTML(badgeId, idx, skillName, state) {
@@ -786,6 +976,21 @@
       </div>`;
   }
 
+  function buildTPSkillRowHTML(badgeId, idx, skillName, state) {
+    const tpIdx = 'tp:' + idx;
+    const { working } = getSkillData(state, badgeId, tpIdx);
+    return `
+      <div class="skill-row is-tp" data-badge="${badgeId}" data-skill="${tpIdx}">
+        <div class="sk-tap-area">
+          <span class="sk-name">${skillName}</span>
+          <div class="sk-indicators">
+            <span class="sk-tp-tag">TP</span>
+            <span class="sk-bookmark${working ? ' active' : ''}">${BOOKMARK_SVG}</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
   function countMastered(badge, state) {
     return badge.skills.filter((_, i) => getSkillData(state, badge.id, i).stars === 3).length;
   }
@@ -798,6 +1003,10 @@
     const pct      = total > 0 ? Math.round((mastered / total) * 100) : 0;
     const c        = BADGE_COLORS[badge.id] || { bg: 'var(--accent-soft)', fg: 'var(--accent)', bar: 'var(--accent)' };
     const skillsHTML = badge.skills.map((s, i) => buildSkillRowHTML(badge.id, i, s, state)).join('');
+    const tpSkills = badge.tpSkills || [];
+    const tpHTML = tpSkills.length > 0
+      ? `<div class="tp-divider">Teaching Progression</div>` + tpSkills.map((s, i) => buildTPSkillRowHTML(badge.id, i, s, state)).join('')
+      : '';
     return `
       <div class="badge-section${expanded ? ' expanded' : ''}" data-badge-id="${badge.id}" style="background:${c.bg}">
         <button class="badge-header" type="button">
@@ -815,7 +1024,7 @@
           </div>
         </button>
         <div class="badge-body">
-          <div class="badge-body-inner">${skillsHTML}</div>
+          <div class="badge-body-inner">${skillsHTML}${tpHTML}</div>
         </div>
       </div>`;
   }
@@ -882,15 +1091,27 @@
     const el = document.getElementById('working-section');
     if (!el) return;
 
-    // Collect all working skills in badge order
+    // Collect all working skills in badge order (assessed + TP + custom)
     const items = [];
     SKILL_GROUPS.forEach(g => g.badges.forEach(badge => {
       badge.skills.forEach((skillName, i) => {
         if (getSkillData(state, badge.id, i).working) {
-          items.push({ badge, skillName, idx: i });
+          items.push({ badge, skillName, idx: i, isTP: false });
+        }
+      });
+      (badge.tpSkills || []).forEach((skillName, i) => {
+        const tpIdx = 'tp:' + i;
+        if (getSkillData(state, badge.id, tpIdx).working) {
+          items.push({ badge, skillName, idx: tpIdx, isTP: true });
         }
       });
     }));
+    // Custom skills
+    loadCustomSkills().forEach(cs => {
+      if (getSkillData(state, '_custom', cs.id).working) {
+        items.push({ badge: { id: '_custom', name: 'Custom Skills' }, skillName: cs.name, idx: cs.id, isTP: false, isCustom: true });
+      }
+    });
 
     if (items.length === 0) {
       el.innerHTML = '';
@@ -900,19 +1121,19 @@
     const cs = loadCollapseState();
     const collapsed = cs['_working'] === true;
 
-    const listHTML = items.map(({ badge, skillName, idx }) => {
+    const listHTML = items.map(({ badge, skillName, idx, isTP }) => {
       const st = loadSkillsState();
       const { stars } = getSkillData(st, badge.id, idx);
-      const starHTML = [1,2,3].map(n =>
-        `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`
-      ).join('');
+      const rightHTML = isTP
+        ? '<span class="sk-tp-tag">TP</span>'
+        : [1,2,3].map(n => `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`).join('');
       return `
       <div class="ws-item" data-badge="${badge.id}" data-skill="${idx}">
         <div class="ws-info">
           <span class="ws-skill-name">${skillName}</span>
-          <span class="ws-badge-label">${badge.name}</span>
+          <span class="ws-badge-label">${badge.name}${isTP ? ' — TP' : ''}</span>
         </div>
-        <span class="sr-stars">${starHTML}</span>
+        <span class="sr-stars">${rightHTML}</span>
         <span class="sr-bookmark active ws-remove" data-badge="${badge.id}" data-skill="${idx}">${BOOKMARK_SVG}</span>
       </div>`;
     }).join('');
@@ -1032,26 +1253,37 @@
     SKILL_GROUPS.forEach(g => g.badges.forEach(badge => {
       badge.skills.forEach((skillName, i) => {
         if (getSkillData(state, badge.id, i).working) {
-          workingItems.push({ badge, skillName, idx: i });
+          workingItems.push({ badge, skillName, idx: i, isTP: false });
+        }
+      });
+      (badge.tpSkills || []).forEach((skillName, i) => {
+        const tpIdx = 'tp:' + i;
+        if (getSkillData(state, badge.id, tpIdx).working) {
+          workingItems.push({ badge, skillName, idx: tpIdx, isTP: true });
         }
       });
     }));
+    loadCustomSkills().forEach(cs => {
+      if (getSkillData(state, '_custom', cs.id).working) {
+        workingItems.push({ badge: { id: '_custom', name: 'Custom Skills' }, skillName: cs.name, idx: cs.id, isTP: false });
+      }
+    });
 
     if (workingItems.length > 0) {
       const cs = loadCollapseState();
       const dwCollapsed = cs['_dash_working'] !== false; // collapsed by default
-      const itemsHTML = workingItems.map(({ badge, skillName, idx }) => {
+      const itemsHTML = workingItems.map(({ badge, skillName, idx, isTP }) => {
         const stars = getSkillData(state, badge.id, idx).stars;
-        const dwStars = [1,2,3].map(n =>
-          `<span class="dw-star${stars >= n ? ' filled' : ''}">★</span>`
-        ).join('');
+        const rightHTML = isTP
+          ? '<span class="sk-tp-tag">TP</span>'
+          : [1,2,3].map(n => `<span class="dw-star${stars >= n ? ' filled' : ''}">★</span>`).join('');
         return `
           <div class="dw-item" data-badge="${badge.id}" data-skill="${idx}">
             <div class="dw-item-info">
               <span class="dw-item-name">${skillName}</span>
-              <span class="dw-item-badge">${badge.name}</span>
+              <span class="dw-item-badge">${badge.name}${isTP ? ' — TP' : ''}</span>
             </div>
-            <span class="dw-stars">${dwStars}</span>
+            <span class="dw-stars">${rightHTML}</span>
             <span class="sr-bookmark active">${BOOKMARK_SVG}</span>
           </div>`;
       }).join('');
@@ -1135,16 +1367,31 @@
   }
 
   function showSkillDetail(badgeId, idx) {
-    const badge = ALL_BADGES.find(b => b.id === badgeId);
-    if (!badge || idx >= badge.skills.length) return;
-    const skillName = badge.skills[idx];
+    const isCustom = badgeId === '_custom';
+    const badge = isCustom ? null : ALL_BADGES.find(b => b.id === badgeId);
+    if (!badge && !isCustom) return;
+    const isTP = String(idx).startsWith('tp:');
+    let skillName;
+    if (isCustom) {
+      const customs = loadCustomSkills();
+      const cs = customs.find(c => c.id === idx);
+      if (!cs) return;
+      skillName = cs.name;
+    } else if (isTP) {
+      const tpIdx = +String(idx).split(':')[1];
+      if (!badge.tpSkills || tpIdx >= badge.tpSkills.length) return;
+      skillName = badge.tpSkills[tpIdx];
+    } else {
+      if (idx >= badge.skills.length) return;
+      skillName = badge.skills[idx];
+    }
     const state = loadSkillsState();
     const { stars, working } = getSkillData(state, badgeId, idx);
     const notes = getSkillNotes(badgeId, idx);
 
     const overlay = document.getElementById('skill-detail-overlay');
     overlay.querySelector('#sd-title').textContent = skillName;
-    overlay.querySelector('#sd-badge-name').textContent = badge.name;
+    overlay.querySelector('#sd-badge-name').textContent = isCustom ? 'Custom Skills' : badge.name + (isTP ? ' — Teaching Progression' : '');
 
     const starsHTML = [1, 2, 3].map(n =>
       `<button class="sd-star-btn${stars >= n ? ' filled' : ''}" data-star="${n}" type="button">${STAR_SVG}</button>`
@@ -1167,13 +1414,21 @@
         }).join('')
       : '<div class="sd-notes-empty">No notes yet. Add coaching tips, exercises, or reminders below.</div>';
 
+    const showStars = !isTP && !isCustom;
+    const masteredAt = showStars ? getSkillData(state, badgeId, idx).masteredAt : null;
+    const masteryDateVal = masteredAt ? masteredAt.split('T')[0] : '';
+    const masteryDateStr = masteredAt ? new Date(masteredAt).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
     const scrollEl = overlay.querySelector('#sd-scroll');
     scrollEl.innerHTML = `
       <div class="sd-toolbar">
-        <div class="sd-toolbar-section">
+        ${showStars ? `<div class="sd-toolbar-section">
           <div class="sd-section-label">Kiwi Skate Progression</div>
           <div class="sd-stars" id="sd-stars" data-badge="${badgeId}" data-skill="${idx}">${starsHTML}</div>
-        </div>
+          <div class="sd-mastery-date" id="sd-mastery-date" style="${stars === 3 ? '' : 'display:none'}">
+            <span class="sd-mastery-label">Mastered</span>
+            <input type="date" class="sd-mastery-input" id="sd-mastery-input" value="${masteryDateVal}" />
+          </div>
+        </div>` : '<div class="sd-toolbar-section"></div>'}
         <div class="sd-toolbar-actions">
           <button class="sd-action-btn sd-bookmark-btn${working ? ' active' : ''}" id="sd-working-toggle" data-badge="${badgeId}" data-skill="${idx}" type="button" title="${working ? 'Working on this' : 'Mark as working on it'}">
             ${BOOKMARK_SVG}
@@ -1192,6 +1447,19 @@
         <div class="sd-notes-list" id="sd-notes-list" data-badge="${badgeId}" data-skill="${idx}">${notesHTML}</div>
       </div>`;
 
+    // Mastery date change handler
+    const masteryInput = scrollEl.querySelector('#sd-mastery-input');
+    if (masteryInput) {
+      masteryInput.addEventListener('change', () => {
+        const st = loadSkillsState();
+        const d = ensureSkillEntry(st, badgeId, +idx);
+        if (masteryInput.value) {
+          d.masteredAt = new Date(masteryInput.value).toISOString();
+        }
+        saveSkillsState(st);
+      });
+    }
+
     // Scroll to top
     scrollEl.scrollTop = 0;
     overlay.classList.add('open');
@@ -1205,11 +1473,28 @@
         const st = loadSkillsState();
         const d = ensureSkillEntry(st, badgeId, +idx);
         d.stars = d.stars === newStar ? newStar - 1 : newStar;
+        // Track mastery date
+        if (d.stars === 3 && !d.masteredAt) {
+          d.masteredAt = new Date().toISOString();
+        } else if (d.stars < 3) {
+          delete d.masteredAt;
+        }
         saveSkillsState(st);
         saveLastEdit(badgeId, +idx, d.stars);
         scrollEl.querySelectorAll('.sd-star-btn').forEach(btn => {
           btn.classList.toggle('filled', +btn.dataset.star <= d.stars);
         });
+        // Update mastery date display
+        const masteryEl = scrollEl.querySelector('#sd-mastery-date');
+        if (masteryEl) {
+          if (d.stars === 3 && d.masteredAt) {
+            const mDate = new Date(d.masteredAt).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' });
+            masteryEl.innerHTML = `<span class="sd-mastery-label">Mastered</span><input type="date" class="sd-mastery-input" id="sd-mastery-input" value="${d.masteredAt.split('T')[0]}" />`;
+            masteryEl.style.display = '';
+          } else {
+            masteryEl.style.display = 'none';
+          }
+        }
         // Update the skill row behind the overlay
         refreshSkillRow(badgeId, idx);
         updateBadgePill(badgeId, st);
@@ -1294,7 +1579,8 @@
   // ============================================================
   function toggleWorking(badgeId, idx) {
     const state = loadSkillsState();
-    const d = ensureSkillEntry(state, badgeId, +idx);
+    const key = String(idx).startsWith('tp:') || String(idx).startsWith('custom:') ? idx : +idx;
+    const d = ensureSkillEntry(state, badgeId, key);
     d.working = !d.working;
     saveSkillsState(state);
 
@@ -1335,6 +1621,56 @@
   // ============================================================
   // SKILLS — INIT & EVENTS
   // ============================================================
+  function renderCustomSkills() {
+    const el = document.getElementById('custom-skills-section');
+    if (!el) return;
+    const customs = loadCustomSkills();
+    const state = loadSkillsState();
+    const skillsHTML = customs.map(cs => {
+      const { working } = getSkillData(state, '_custom', cs.id);
+      return `
+        <div class="skill-row is-tp" data-badge="_custom" data-skill="${cs.id}">
+          <div class="sk-tap-area">
+            <span class="sk-name">${cs.name}</span>
+            <div class="sk-indicators">
+              <span class="sk-bookmark${working ? ' active' : ''}">${BOOKMARK_SVG}</span>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="section-label">Custom Skills</div>
+      <div class="custom-skills-add">
+        <input type="text" class="custom-skill-input" id="custom-skill-input" placeholder="Add a custom skill..." maxlength="80" />
+        <button class="custom-skill-add-btn" id="custom-skill-add-btn" type="button">Add</button>
+      </div>
+      <div class="custom-skills-list" id="custom-skills-list">${skillsHTML}</div>`;
+
+    // Add skill button
+    const addBtn = document.getElementById('custom-skill-add-btn');
+    const input = document.getElementById('custom-skill-input');
+    function doAdd() {
+      const name = input.value.trim();
+      if (!name) return;
+      addCustomSkill(name);
+      input.value = '';
+      renderCustomSkills();
+      renderWorkingSection(loadSkillsState());
+    }
+    addBtn.addEventListener('click', doAdd);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+
+    // Delegated click on custom skills list
+    document.getElementById('custom-skills-list').addEventListener('click', e => {
+      const row = e.target.closest('.skill-row');
+      if (row) {
+        const sk = row.dataset.skill;
+        showSkillDetail(row.dataset.badge, sk);
+      }
+    });
+  }
+
   function initSkills() {
     const state    = loadSkillsState();
     const collapse = loadCollapseState();
@@ -1350,6 +1686,7 @@
 
     updateSummaryCard(state);
     renderWorkingSection(state);
+    renderCustomSkills();
     renderDashboard();
 
     // Initialise expanded heights without animation
@@ -1366,7 +1703,8 @@
       // Skill row tap — open detail panel
       const row = e.target.closest('.skill-row');
       if (row) {
-        showSkillDetail(row.dataset.badge, +row.dataset.skill);
+        const sk = row.dataset.skill;
+        showSkillDetail(row.dataset.badge, sk.startsWith('tp:') || sk.startsWith('custom:') ? sk : +sk);
         return;
       }
 
@@ -1423,10 +1761,21 @@
     // ---- Skills search ----
     const searchInput = document.getElementById('skills-search');
     const searchResults = document.getElementById('skills-search-results');
+    const searchClear = document.getElementById('skills-search-clear');
     const workingSec = document.getElementById('working-section');
     if (searchInput && searchResults) {
+      function clearSearch() {
+        searchInput.value = '';
+        searchResults.style.display = 'none';
+        searchResults.innerHTML = '';
+        list.style.display = '';
+        if (workingSec) workingSec.style.display = '';
+        if (searchClear) searchClear.classList.remove('visible');
+      }
+      if (searchClear) searchClear.addEventListener('click', clearSearch);
       searchInput.addEventListener('input', () => {
         const q = searchInput.value.trim().toLowerCase();
+        if (searchClear) searchClear.classList.toggle('visible', q.length > 0);
         if (!q) {
           searchResults.style.display = 'none';
           searchResults.innerHTML = '';
@@ -1441,25 +1790,36 @@
         SKILL_GROUPS.forEach(g => g.badges.forEach(badge => {
           badge.skills.forEach((skillName, i) => {
             if (skillName.toLowerCase().includes(q)) {
-              matches.push({ badge, skillName, idx: i });
+              matches.push({ badge, skillName, idx: i, isTP: false });
+            }
+          });
+          (badge.tpSkills || []).forEach((skillName, i) => {
+            if (skillName.toLowerCase().includes(q)) {
+              matches.push({ badge, skillName, idx: 'tp:' + i, isTP: true });
             }
           });
         }));
+        // Custom skills
+        loadCustomSkills().forEach(cs => {
+          if (cs.name.toLowerCase().includes(q)) {
+            matches.push({ badge: { id: '_custom', name: 'Custom Skills' }, skillName: cs.name, idx: cs.id, isTP: false, isCustom: true });
+          }
+        });
         if (matches.length === 0) {
           searchResults.innerHTML = '<div class="search-no-results">No skills found</div>';
         } else {
-          searchResults.innerHTML = matches.map(({ badge, skillName, idx }) => {
+          searchResults.innerHTML = matches.map(({ badge, skillName, idx, isTP }) => {
             const { stars, working } = getSkillData(st, badge.id, idx);
-            const starHTML = [1,2,3].map(n =>
-              `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`
-            ).join('');
+            const rightHTML = isTP
+              ? '<span class="sk-tp-tag">TP</span>'
+              : [1,2,3].map(n => `<span class="sr-star${stars >= n ? ' filled' : ''}">★</span>`).join('');
             return `
               <div class="search-result-item" data-badge="${badge.id}" data-skill="${idx}">
                 <div class="sr-info">
                   <span class="sr-name">${skillName}</span>
-                  <span class="sr-badge">${badge.name}</span>
+                  <span class="sr-badge">${badge.name}${isTP ? ' — TP' : ''}</span>
                 </div>
-                <span class="sr-stars">${starHTML}</span>
+                <span class="sr-stars">${rightHTML}</span>
                 <span class="sr-bookmark${working ? ' active' : ''}">${BOOKMARK_SVG}</span>
               </div>`;
           }).join('');
@@ -1468,7 +1828,9 @@
       });
       searchResults.addEventListener('click', e => {
         const item = e.target.closest('.search-result-item');
-        if (item) showSkillDetail(item.dataset.badge, +item.dataset.skill);
+        if (!item) return;
+        const sk = item.dataset.skill;
+        showSkillDetail(item.dataset.badge, sk.startsWith('tp:') || sk.startsWith('custom:') ? sk : +sk);
       });
     }
   }
