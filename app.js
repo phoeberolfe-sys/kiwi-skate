@@ -1445,7 +1445,10 @@
           <button class="sd-note-add" id="sd-note-add" type="button">Add Note</button>
         </div>
         <div class="sd-notes-list" id="sd-notes-list" data-badge="${badgeId}" data-skill="${idx}">${notesHTML}</div>
-      </div>`;
+      </div>
+      ${isCustom ? `<div class="sd-section sd-delete-section">
+        <button class="sd-delete-btn" id="sd-delete-custom" type="button">Delete Custom Skill</button>
+      </div>` : ''}`;
 
     // Mastery date change handler
     const masteryInput = scrollEl.querySelector('#sd-mastery-input');
@@ -1529,6 +1532,17 @@
         deleteSkillNote(badgeId, idx, +delBtn.dataset.noteId);
         refreshNotesInDetail(badgeId, idx);
         refreshSkillRow(badgeId, idx);
+        return;
+      }
+      // Delete custom skill
+      if (e.target.closest('#sd-delete-custom')) {
+        if (confirm('Delete this custom skill? This cannot be undone.')) {
+          deleteCustomSkill(idx);
+          overlay.classList.remove('open');
+          renderCustomSkills();
+          renderWorkingSection(loadSkillsState());
+          renderDashboard();
+        }
         return;
       }
     };
