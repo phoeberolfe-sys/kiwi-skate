@@ -1669,21 +1669,15 @@
     const body = section.querySelector('.badge-body');
     section.classList.add('expanded');
     body.style.maxHeight = body.scrollHeight + 'px';
-    body.addEventListener('transitionend', function onEnd(e) {
-      if (e.target === body && e.propertyName === 'max-height') {
-        if (section.classList.contains('expanded')) body.style.maxHeight = 'none';
-        body.removeEventListener('transitionend', onEnd);
-      }
-    });
   }
 
   function collapseSection(section) {
     const body = section.querySelector('.badge-body');
     body.style.maxHeight = body.scrollHeight + 'px';
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
       body.style.maxHeight = '0';
       section.classList.remove('expanded');
-    }));
+    });
   }
 
   // ============================================================
@@ -1760,7 +1754,7 @@
     // Initialise expanded heights without animation
     list.querySelectorAll('.badge-section.expanded .badge-body').forEach(body => {
       body.style.transition = 'none';
-      body.style.maxHeight  = 'none';
+      body.style.maxHeight  = body.scrollHeight + 'px';
     });
     requestAnimationFrame(() => {
       list.querySelectorAll('.badge-body').forEach(body => { body.style.transition = ''; });
@@ -1807,19 +1801,15 @@
           const chevron = wsEl.querySelector('.ws-chevron');
           if (!listEl) return;
           if (cs['_working']) {
-            listEl.style.maxHeight = listEl.scrollHeight + 'px';
-            listEl.style.overflow  = 'hidden';
             listEl.style.transition = 'max-height 0.3s ease';
-            requestAnimationFrame(() => requestAnimationFrame(() => { listEl.style.maxHeight = '0'; }));
+            listEl.style.overflow   = 'hidden';
+            listEl.style.maxHeight  = listEl.scrollHeight + 'px';
+            requestAnimationFrame(() => { listEl.style.maxHeight = '0'; });
             if (chevron) chevron.classList.add('collapsed');
           } else {
             listEl.style.transition = 'max-height 0.3s ease';
+            listEl.style.overflow   = 'hidden';
             listEl.style.maxHeight  = listEl.scrollHeight + 'px';
-            listEl.addEventListener('transitionend', () => {
-              listEl.style.maxHeight  = 'none';
-              listEl.style.overflow   = '';
-              listEl.style.transition = '';
-            }, { once: true });
             if (chevron) chevron.classList.remove('collapsed');
           }
         }
