@@ -979,9 +979,11 @@ html, body {
 .badge-body {
   overflow: hidden;
   max-height: 0;
-  transition: max-height 0.3s ease;
+  transition: max-height 0.35s ease;
 }
-/* expanded: max-height set via JS to allow smooth animation */
+.badge-section.expanded .badge-body {
+  max-height: 2000px;
+}
 
 .badge-body-inner {
   padding: 8px 12px 14px;
