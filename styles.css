@@ -1293,6 +1293,17 @@ html, body {
   transition: background 0.15s, transform 0.15s;
 }
 .saved-workout-tile:active { background: rgba(0,0,0,0.03); transform: scale(0.98); }
+.swt-star {
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.swt-star.active { color: #f59e0b; }
+.dw-pinned-star { color: #f59e0b; vertical-align: -1px; margin-right: 2px; }
 .swt-left { flex: 1; min-width: 0; }
 .swt-name {
   font-size: 15px;
@@ -1728,11 +1739,14 @@ html, body {
   align-items: center;
   gap: 14px;
   background: var(--bg-card);
+  cursor: pointer;
+  transition: background 0.15s;
   border: none;
   border-radius: 14px;
   padding: 14px 16px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
+.wdo-item:active { background: rgba(0,0,0,0.03); }
 .wdo-item-num {
   width: 30px;
   height: 30px;

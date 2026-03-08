@@ -167,8 +167,11 @@
       const dateStr = new Date(entry.date).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' });
       const totalMin = totalWorkoutMins(entry.items);
       const skillCount = entry.items.length;
+      const STAR_FILLED = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+      const STAR_EMPTY  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
       return `
         <div class="saved-workout-tile" data-workout-id="${entry.id}">
+          <button class="swt-star${entry.starred ? ' active' : ''}" data-workout-id="${entry.id}" type="button">${entry.starred ? STAR_FILLED : STAR_EMPTY}</button>
           <div class="swt-left">
             <div class="swt-name">${entry.name}</div>
             <div class="swt-meta">${skillCount} skill${skillCount !== 1 ? 's' : ''} · ${dateStr}</div>
@@ -180,13 +183,22 @@
         </div>`;
     }
 
-    if (thisWeek.length > 0) {
-      html += `<div class="section-label">This Week</div>`;
-      html += thisWeek.map(buildTile).join('');
+    const pinned = saved.filter(w => w.starred);
+    const unpinned = saved.filter(w => !w.starred);
+    const unthisWeek = unpinned.filter(w => new Date(w.date) >= startOfWeek);
+    const unearlier  = unpinned.filter(w => new Date(w.date) < startOfWeek);
+
+    if (pinned.length > 0) {
+      html += `<div class="section-label">Pinned</div>`;
+      html += pinned.map(buildTile).join('');
     }
-    if (earlier.length > 0) {
+    if (unthisWeek.length > 0) {
+      html += `<div class="section-label">This Week</div>`;
+      html += unthisWeek.map(buildTile).join('');
+    }
+    if (unearlier.length > 0) {
       html += `<div class="section-label">Earlier</div>`;
-      html += earlier.map(buildTile).join('');
+      html += unearlier.map(buildTile).join('');
     }
 
     el.innerHTML = html;
@@ -230,9 +242,9 @@
     const totalMin = totalWorkoutMins(entry.items);
     const itemsHTML = entry.items.map((item, i) => {
       const badge = ALL_BADGES.find(b => b.id === item.badgeId);
-      const badgeName = badge ? badge.name : '';
+      const badgeName = badge ? badge.name : (item.badgeId === '_custom' ? 'Custom Skills' : '');
       return `
-        <div class="wdo-item">
+        <div class="wdo-item" data-badge-id="${item.badgeId}" data-skill-idx="${item.skillIdx}">
           <div class="wdo-item-num">${i + 1}</div>
           <div class="wdo-item-info">
             <div class="wdo-item-name">${item.skillName}</div>
@@ -244,6 +256,17 @@
     scrollEl.innerHTML = `
       <div class="wdo-meta">${entry.items.length} skill${entry.items.length !== 1 ? 's' : ''} · ${totalMin} min · ${dateStr}</div>
       <div class="wdo-items">${itemsHTML}</div>`;
+    scrollEl.onclick = e => {
+      const item = e.target.closest('.wdo-item');
+      if (item) {
+        const badgeId = item.dataset.badgeId;
+        const si = item.dataset.skillIdx;
+        overlay.classList.remove('open');
+        showSkillDetail(badgeId, si && (si.startsWith('tp:') || si.startsWith('custom:')) ? si : +si, () => {
+          overlay.classList.add('open');
+        });
+      }
+    };
     scrollEl.scrollTop = 0;
     overlay.classList.add('open');
   }
@@ -576,10 +599,18 @@
     initSkillPicker();
     renderWorkouts();
 
-    // List click — open detail
+    // List click — star toggle or open detail
     const el = document.getElementById('workouts-list');
     if (el) {
       el.addEventListener('click', e => {
+        const starBtn = e.target.closest('.swt-star');
+        if (starBtn) {
+          const id = +starBtn.dataset.workoutId;
+          const saved = loadWorkouts();
+          const entry = saved.find(w => w.id === id);
+          if (entry) { entry.starred = !entry.starred; saveWorkouts(saved); renderWorkouts(); renderDashboard(); }
+          return;
+        }
         const tile = e.target.closest('.saved-workout-tile');
         if (!tile) return;
         const id = +tile.dataset.workoutId;
@@ -1227,12 +1258,27 @@
         </div>`;
     }
 
-    // --- 3. Recent Workouts (up to 3) — shown before Working On for quick access ---
+    // --- 3. Pinned & Recent Workouts ---
     const workouts = loadWorkouts();
-    html += `<div class="section-label">Recent Workouts</div>`;
-    if (workouts.length > 0) {
-      const recent = workouts.slice(0, 3);
-      const wHTML = recent.map(w => {
+    const pinnedWorkouts = workouts.filter(w => w.starred);
+    if (pinnedWorkouts.length > 0) {
+      const pHTML = pinnedWorkouts.map(w => {
+        const mins = totalWorkoutMins(w.items);
+        return `
+          <div class="dw-workout" data-workout-id="${w.id}">
+            <div class="dw-workout-info">
+              <span class="dw-workout-name"><svg class="dw-pinned-star" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> ${w.name}</span>
+              <span class="dw-workout-meta">${w.items.length} skill${w.items.length !== 1 ? 's' : ''} &middot; ${mins} min</span>
+            </div>
+            <svg class="dw-workout-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>`;
+      }).join('');
+      html += `<div class="section-label">Pinned Workouts</div><div class="card dash-workouts-card">${pHTML}</div>`;
+    }
+    const recentUnpinned = workouts.filter(w => !w.starred).slice(0, 3);
+    if (recentUnpinned.length > 0) {
+      html += `<div class="section-label">Recent Workouts</div>`;
+      const wHTML = recentUnpinned.map(w => {
         const mins = totalWorkoutMins(w.items);
         return `
           <div class="dw-workout" data-workout-id="${w.id}">
@@ -1244,7 +1290,8 @@
           </div>`;
       }).join('');
       html += `<div class="card dash-workouts-card">${wHTML}</div>`;
-    } else {
+    } else if (workouts.length === 0) {
+      html += `<div class="section-label">Recent Workouts</div>`;
       html += `<div class="card dash-empty-card"><span class="dash-empty-text">No workouts yet. Tap Workouts to create one!</span></div>`;
     }
 
@@ -1362,11 +1409,15 @@
     overlay.querySelector('#sd-close').addEventListener('click', closeSkillDetail);
   }
 
+  let _sdOnBack = null;
+
   function closeSkillDetail() {
     document.getElementById('skill-detail-overlay').classList.remove('open');
+    if (_sdOnBack) { const cb = _sdOnBack; _sdOnBack = null; cb(); }
   }
 
-  function showSkillDetail(badgeId, idx) {
+  function showSkillDetail(badgeId, idx, onBack) {
+    _sdOnBack = onBack || null;
     const isCustom = badgeId === '_custom';
     const badge = isCustom ? null : ALL_BADGES.find(b => b.id === badgeId);
     if (!badge && !isCustom) return;
@@ -1618,9 +1669,12 @@
     const body = section.querySelector('.badge-body');
     section.classList.add('expanded');
     body.style.maxHeight = body.scrollHeight + 'px';
-    body.addEventListener('transitionend', () => {
-      if (section.classList.contains('expanded')) body.style.maxHeight = 'none';
-    }, { once: true });
+    body.addEventListener('transitionend', function onEnd(e) {
+      if (e.target === body && e.propertyName === 'max-height') {
+        if (section.classList.contains('expanded')) body.style.maxHeight = 'none';
+        body.removeEventListener('transitionend', onEnd);
+      }
+    });
   }
 
   function collapseSection(section) {
