@@ -1665,15 +1665,31 @@
   // ============================================================
   // SKILLS — COLLAPSE / EXPAND ANIMATION
   // ============================================================
+  function measureBodyHeight(body) {
+    // iOS Safari returns scrollHeight=0 when overflow:hidden + max-height:0
+    // Temporarily unlock to get true content height
+    body.style.transition = 'none';
+    body.style.maxHeight = 'none';
+    const h = body.scrollHeight;
+    body.style.maxHeight = '0';
+    body.offsetHeight; // force reflow before restoring transition
+    body.style.transition = '';
+    return h;
+  }
+
   function expandSection(section) {
     const body = section.querySelector('.badge-body');
+    const h = measureBodyHeight(body);
     section.classList.add('expanded');
-    body.style.maxHeight = body.scrollHeight + 'px';
+    requestAnimationFrame(() => { body.style.maxHeight = h + 'px'; });
   }
 
   function collapseSection(section) {
     const body = section.querySelector('.badge-body');
-    body.style.maxHeight = body.scrollHeight + 'px';
+    // Ensure we have a pixel value to animate from
+    if (!body.style.maxHeight || body.style.maxHeight === 'none') {
+      body.style.maxHeight = measureBodyHeight(body) + 'px';
+    }
     requestAnimationFrame(() => {
       body.style.maxHeight = '0';
       section.classList.remove('expanded');
@@ -1751,10 +1767,12 @@
     renderCustomSkills();
     renderDashboard();
 
-    // Initialise expanded heights without animation
+    // Initialise expanded heights without animation (iOS Safari: unlock to measure)
     list.querySelectorAll('.badge-section.expanded .badge-body').forEach(body => {
       body.style.transition = 'none';
-      body.style.maxHeight  = body.scrollHeight + 'px';
+      body.style.maxHeight  = 'none';
+      const h = body.scrollHeight;
+      body.style.maxHeight  = h + 'px';
     });
     requestAnimationFrame(() => {
       list.querySelectorAll('.badge-body').forEach(body => { body.style.transition = ''; });
