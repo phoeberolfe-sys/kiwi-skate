@@ -40,10 +40,23 @@
         }
       });
       if (changed) {
-        // Re-render everything with the synced data
+        // Re-render UI with synced data (don't call initSkills — would stack duplicate listeners)
+        const st = loadSkillsState();
         renderDashboard();
         renderWorkouts();
-        initSkills();
+        updateSummaryCard(st);
+        renderWorkingSection(st);
+        renderCustomSkills();
+        const list = document.getElementById('skills-list');
+        if (list) {
+          const collapse = loadCollapseState();
+          let html = '';
+          SKILL_GROUPS.forEach(group => {
+            html += `<div class="section-label">${group.label}</div>`;
+            group.badges.forEach(badge => { html += buildBadgeSectionHTML(badge, st, collapse); });
+          });
+          list.innerHTML = html;
+        }
       }
     } catch (e) { console.warn('Sync error:', e); }
   }
@@ -1726,6 +1739,8 @@
     });
   }
 
+  let _skillsInited = false;
+
   function initSkills() {
     const state    = loadSkillsState();
     const collapse = loadCollapseState();
@@ -1743,6 +1758,9 @@
     renderWorkingSection(state);
     renderCustomSkills();
     renderDashboard();
+
+    if (_skillsInited) return;
+    _skillsInited = true;
 
     // ---- Delegated listener: badge list ----
     list.addEventListener('click', e => {
